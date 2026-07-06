@@ -1,0 +1,43 @@
+# Example serving config for the paper's two-model AIME pool.
+#
+# Prerequisites:
+#   1. `cre cluster` and `cre fit` have produced artifacts/aime/
+#      (centroids.npy + router.json with the routing table and lambda*)
+#   2. One vLLM server per model. --max-model-len must cover input + the
+#      40,960-token AIME generation, or long chains of thought get truncated:
+#      vllm serve WeiboAI/VibeThinker-1.5B              --port 8001 --max-model-len 42000
+#      vllm serve Qwen/Qwen3-30B-A3B-Thinking-2507-FP8  --port 8002 --max-model-len 42000
+#
+# Then: cre serve --config example_config_aime24.yaml
+
+artifacts_dir: artifacts/aime
+
+# Optional: append a per-request routing/escalation record to this JSONL file.
+# Writing happens in a background task, off the request path. Live tallies are
+# always available at GET /stats regardless of this setting.
+# decision_log: results/decisions.jsonl
+
+# Keys must match the model names used in the routing table (`cre fit` stats).
+# `litellm_model` is the LiteLLM model string for the vLLM server (the
+# `hosted_vllm/<model>` form), and `api_base` is where that server listens.
+models:
+  VibeThinker-1.5B:
+    litellm_model: hosted_vllm/WeiboAI/VibeThinker-1.5B
+    api_base: http://127.0.0.1:8001/v1
+  Qwen3-30B-A3B:
+    litellm_model: hosted_vllm/Qwen/Qwen3-30B-A3B-Thinking-2507-FP8
+    api_base: http://127.0.0.1:8002/v1
+
+# Stage 2: escalate VibeThinker's low-quality outputs to Qwen3-30B. The
+# escalation ladder is NOT configured here; it is derived from the fitted stats
+# (Pareto-efficient models ordered by the cost-adjusted lambda arithmetic). You
+# only declare each efficient model's QE classifier; the strongest needs none.
+qe:
+  enabled: true
+  classifiers:
+    VibeThinker-1.5B:
+      checkpoint: ymoslem/ModernBERT-base-AIME-1983-2023-instruct-qe-classifier-binary-10ep-lr5e-05
+      base_tokenizer: answerdotai/ModernBERT-base
+      accept_threshold: 0.5
+      max_length: 4096
+    # Qwen3-30B-A3B is the strongest model, so it needs no classifier.

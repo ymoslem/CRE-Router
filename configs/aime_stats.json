@@ -1,0 +1,14 @@
+{
+  "_note": "Per-cluster training statistics for the AIME 1983-2023 pool (paper Table 'aime_training'). Cluster sizes are the AIME train split cluster counts. Reproduce lambda* with: cre fit --stats configs/aime_stats.json --budget 20",
+  "cluster_sizes": {"0": 194, "1": 405, "2": 322},
+  "models": {
+    "VibeThinker-1.5B": {
+      "errors": {"0": 0.130, "1": 0.083, "2": 0.182},
+      "cluster_tpot_ms": {"0": 9.282, "1": 9.348, "2": 8.825}
+    },
+    "Qwen3-30B-A3B": {
+      "errors": {"0": 0.063, "1": 0.031, "2": 0.083},
+      "cluster_tpot_ms": {"0": 23.419, "1": 24.070, "2": 26.620}
+    }
+  }
+}

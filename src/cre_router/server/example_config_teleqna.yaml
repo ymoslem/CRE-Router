@@ -1,0 +1,51 @@
+# Example serving config for the paper's TeleQnA pool (all four models).
+#
+# This lists the full pool so the framework's Pareto pruning is visible at
+# serve time: the escalation ladder is derived from the fitted stats (never
+# configured by hand), which drops the dominated Gemma4-E2B and Gemma4-E4B and
+# yields the ladder Qwen3-4B -> Gemma4-26B. `cre fit` prunes them the same way,
+# so the routing table only ever selects the two survivors. In production you
+# would serve just those two; the dominated models are shown here only to
+# demonstrate that they are ignored.
+#
+# Prerequisites:
+#   1. `cre cluster` and `cre fit` have produced artifacts/teleqna/
+#   2. One vLLM server per model. --max-model-len must cover input + the
+#      1,024-token TeleQnA generation:
+#      vllm serve Qwen/Qwen3-4B-Instruct-2507  --port 8001 --max-model-len 2048
+#      vllm serve google/gemma-4-E2B-it        --port 8002 --max-model-len 2048
+#      vllm serve google/gemma-4-26B-A4B-it    --port 8003 --max-model-len 2048
+#      vllm serve google/gemma-4-E4B-it        --port 8004 --max-model-len 2048
+#
+# Then: cre serve --config example_config_teleqna.yaml
+
+artifacts_dir: artifacts/teleqna
+
+# Keys must match the model names used in the routing table (`cre fit` stats).
+models:
+  Qwen3-4B:
+    litellm_model: hosted_vllm/Qwen/Qwen3-4B-Instruct-2507
+    api_base: http://127.0.0.1:8001/v1
+  Gemma4-E2B:
+    litellm_model: hosted_vllm/google/gemma-4-E2B-it
+    api_base: http://127.0.0.1:8002/v1
+  Gemma4-26B:
+    litellm_model: hosted_vllm/google/gemma-4-26B-A4B-it
+    api_base: http://127.0.0.1:8003/v1
+  Gemma4-E4B:
+    litellm_model: hosted_vllm/google/gemma-4-E4B-it
+    api_base: http://127.0.0.1:8004/v1
+
+# Stage 2: escalate Qwen3-4B's low-quality outputs up the ladder. The ladder is
+# auto-derived (Pareto-efficient models by ascending TPOT), so it becomes
+# Qwen3-4B -> Gemma4-26B; the dominated Gemma4-E2B/E4B never appear on it.
+# TeleQnA completions are short, so max_length is 512 (vs 4096 for AIME).
+qe:
+  enabled: true
+  classifiers:
+    Qwen3-4B:
+      checkpoint: ymoslem/ModernBERT-base-TeleQnA-router-qe-classifier-binary-10ep-lr2e-05-qwen4b-5runs_1eval
+      base_tokenizer: answerdotai/ModernBERT-base
+      accept_threshold: 0.5
+      max_length: 512
+    # Gemma4-26B is the strongest surviving model, so it needs no classifier.

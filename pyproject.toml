@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cre-router"
+version = "0.1.0"
+description = "Cluster, Route, Escalate: a cascaded framework for cost-aware LLM serving"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Yasmin Moslem" }]
+keywords = ["llm", "routing", "cascades", "model-serving", "quality-estimation", "vllm", "litellm"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "numpy>=1.26",
+  "scikit-learn>=1.4",
+  "sentence-transformers>=3.0",
+  "pyyaml>=6.0",
+  "anyio>=4.0",
+]
+
+[project.optional-dependencies]
+qe = [
+  "torch>=2.4",
+  "transformers>=4.57",
+  "datasets>=3.0",
+  "accelerate>=1.0",
+]
+serve = [
+  "litellm>=1.60",
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "httpx>=0.27",
+  "torch>=2.4",
+  "transformers>=4.57",
+]
+eval = [
+  "vllm>=0.19",
+]
+full = ["cre-router[qe,serve,eval]"]
+dev = ["pytest>=8.0", "fastapi>=0.115", "httpx>=0.27"]
+
+[tool.pytest.ini_options]
+markers = [
+  "integration: needs a GPU or a running vLLM server; set CRE_TEST_* env vars (skipped by default)",
+]
+
+[project.scripts]
+cre = "cre_router.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ymoslem/CRE-Router"
+Repository = "https://github.com/ymoslem/CRE-Router"
+Issues = "https://github.com/ymoslem/CRE-Router/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cre_router"]

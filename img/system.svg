@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 560" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#374151"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="760" height="560" fill="#ffffff"/>
+
+  <!-- Stage group frames -->
+  <rect x="266" y="10" width="228" height="230" rx="8" fill="none" stroke="#c7d2fe" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text x="278" y="30" fill="#6366f1" font-size="13" font-weight="600">Stage 1 · routing</text>
+
+  <rect x="96" y="262" width="234" height="188" rx="8" fill="none" stroke="#bbf7d0" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text x="108" y="282" fill="#16a34a" font-size="13" font-weight="600">Stage 2 · QE cascade</text>
+
+  <!-- Stage 1 nodes -->
+  <rect x="310" y="38" width="140" height="44" rx="6" fill="#f3f4f6" stroke="#374151" stroke-width="1.5"/>
+  <text x="380" y="65" text-anchor="middle" fill="#111827" font-size="14">Query</text>
+
+  <rect x="300" y="108" width="160" height="50" rx="6" fill="#f3f4f6" stroke="#374151" stroke-width="1.5"/>
+  <text x="380" y="130" text-anchor="middle" fill="#111827" font-size="14">Clustering</text>
+  <text x="380" y="147" text-anchor="middle" fill="#6b7280" font-size="11">k-means, nearest centroid</text>
+
+  <rect x="286" y="184" width="188" height="52" rx="6" fill="#f3f4f6" stroke="#374151" stroke-width="1.5"/>
+  <text x="380" y="206" text-anchor="middle" fill="#111827" font-size="14">Routing decision</text>
+  <text x="380" y="224" text-anchor="middle" fill="#6b7280" font-size="11">Score = Error + &#955; · Cost</text>
+
+  <!-- Stage 2 / model nodes -->
+  <rect x="120" y="292" width="170" height="48" rx="6" fill="#f3f4f6" stroke="#374151" stroke-width="1.5"/>
+  <text x="205" y="312" text-anchor="middle" fill="#111827" font-size="14">Efficient model</text>
+  <text x="205" y="329" text-anchor="middle" fill="#6b7280" font-size="11">(ladder if &gt; 2 models)</text>
+
+  <rect x="470" y="292" width="170" height="48" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="555" y="312" text-anchor="middle" fill="#111827" font-size="14">Strong model</text>
+  <text x="555" y="329" text-anchor="middle" fill="#6b7280" font-size="11">high accuracy</text>
+
+  <!-- QE decision diamond -->
+  <polygon points="205,368 253,400 205,432 157,400" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
+  <text x="205" y="396" text-anchor="middle" fill="#111827" font-size="13">QE</text>
+  <text x="205" y="411" text-anchor="middle" fill="#6b7280" font-size="10">check</text>
+
+  <!-- Output -->
+  <rect x="295" y="476" width="170" height="48" rx="6" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="380" y="505" text-anchor="middle" fill="#111827" font-size="14">Final output</text>
+
+  <!-- Arrows: Stage 1 spine -->
+  <line x1="380" y1="82" x2="380" y2="106" stroke="#374151" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="380" y1="158" x2="380" y2="182" stroke="#374151" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- Routing -> efficient (low cost) -->
+  <path d="M330,236 C270,262 240,268 210,290" fill="none" stroke="#374151" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="236" y="262" text-anchor="middle" fill="#6b7280" font-size="11">low cost</text>
+
+  <!-- Routing -> strong (hard query) -->
+  <path d="M430,236 C500,262 525,268 552,290" fill="none" stroke="#374151" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="524" y="262" text-anchor="middle" fill="#6b7280" font-size="11">hard query</text>
+
+  <!-- Efficient -> QE -->
+  <line x1="205" y1="340" x2="205" y2="366" stroke="#374151" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- QE accept -> output -->
+  <path d="M205,432 L205,500 L293,500" fill="none" stroke="#374151" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="212" y="470" fill="#16a34a" font-size="11">accept</text>
+
+  <!-- QE escalate -> strong -->
+  <path d="M253,400 L420,400 L420,316 L468,316" fill="none" stroke="#374151" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="330" y="393" text-anchor="middle" fill="#ca8a04" font-size="11">escalate</text>
+
+  <!-- Strong -> output -->
+  <path d="M555,340 L555,500 L467,500" fill="none" stroke="#374151" stroke-width="1.6" marker-end="url(#arrow)"/>
+</svg>

@@ -1,0 +1,26 @@
+# Provenance only -- do NOT `pip install -r` this to use the tool. Install the
+# package instead: `pip install -e ".[qe,serve,eval]"` (floors-only, tracks
+# current releases). This file records the exact environment behind the paper's
+# reported numbers.
+#
+# Hardware: 2x NVIDIA A100 SXM 80 GB, Python 3.11, CUDA 12.x. TPOT is specific
+# to this setup; newer vLLM or different GPUs (e.g. H100 with W8A8 FP8) shift
+# TPOT and may change the selected lambda*.
+#
+# Install vllm first (it pulls torch 2.10.0+cu128), then upgrade transformers:
+# vLLM 0.19.0 defaults to transformers 4.57.6, which lacks the `gemma4` arch;
+# 5.5.3 is needed for the Gemma models and runs fine despite vLLM's `<5` pin.
+vllm==0.19.0
+torch==2.10.0
+transformers==5.5.3
+tokenizers==0.22.2
+
+# Clustering and QE pipeline
+sentence-transformers
+scikit-learn
+datasets
+kneed
+matplotlib
+
+# QE (ModernBERT) training only; the wheel must match your installed torch.
+flash-attn==2.8.3

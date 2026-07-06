@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Secrets
+.env
+.env.*
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Experiment outputs
+artifacts/
+logs/
+results/
+*.log
+
+# Downloaded datasets (fetch with data/download.py; not redistributed here)
+data/*.jsonl
+
+# Model training outputs (e.g. cre qe-train --output-dir qe-aime)
+qe-*/
+*.safetensors
+*.pt
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

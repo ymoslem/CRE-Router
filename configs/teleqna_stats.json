@@ -1,0 +1,10 @@
+{
+  "_note": "Model-level training statistics for the TeleQnA four-model pool (paper Table 'teleqna_training'). Pareto pruning removes Gemma4-E2B and Gemma4-E4B. Training-split cluster sizes (9,000 queries): C0=5211, C1=3789. Reproduce lambda* with: cre fit --stats configs/teleqna_stats.json --budget 20",
+  "cluster_sizes": {"0": 5211, "1": 3789},
+  "models": {
+    "Qwen3-4B":   {"tpot_ms": 15.357, "errors": {"0": 0.297, "1": 0.329}},
+    "Gemma4-E2B": {"tpot_ms": 20.337, "errors": {"0": 0.339, "1": 0.390}},
+    "Gemma4-26B": {"tpot_ms": 25.963, "errors": {"0": 0.231, "1": 0.254}},
+    "Gemma4-E4B": {"tpot_ms": 26.827, "errors": {"0": 0.332, "1": 0.293}}
+  }
+}
