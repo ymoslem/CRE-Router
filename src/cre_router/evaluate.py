@@ -70,6 +70,24 @@ def parse_teleqna_answer(text: str) -> int | None:
     return int(numbers[-1]) if numbers else None
 
 
+def parse_telelogs_answer(text: str) -> int | None:
+    """Extract a TeleLogs root-cause number (1-8) from a completion.
+
+    The RCA prompt asks for the cause number enclosed in ``\\boxed{}`` (paper
+    Fig. 2/8), so prefer that, then an explicit ``Answer: n``, then the last
+    ``C<n>`` cause reference. A leading ``C`` is tolerated in every case, and
+    values outside 1-8 are ignored so a stray PCI, timestamp, or throughput
+    figure in the reasoning cannot leak in as the answer.
+    """
+    content = split_thinking(text)
+    for pattern in (r"\\boxed\{\s*C?\s*(\d+)\s*\}", r"Answer:\s*C?\s*(\d+)", r"\bC(\d+)\b"):
+        for candidate in reversed(re.findall(pattern, content)):
+            n = int(candidate)
+            if 1 <= n <= 8:
+                return n
+    return None
+
+
 def answers_match(predicted: int | None, gold: Any) -> bool:
     if predicted is None:
         return False
@@ -88,9 +106,9 @@ def answers_match(predicted: int | None, gold: Any) -> bool:
 class Task:
     """Per-dataset evaluation settings following the paper's Appendix A.
 
-    Sampling follows the model recommendations: thinking-mode models (AIME)
-    use temperature 0.6 / top-p 0.95, direct-answer models (TeleQnA) use
-    0.7 / 0.8; both use top-k 20 and min-p 0.
+    Sampling follows the model recommendations: thinking-mode models (AIME,
+    TeleLogs) use temperature 0.6 / top-p 0.95, direct-answer models (TeleQnA)
+    use 0.7 / 0.8; both use top-k 20 and min-p 0.
     """
 
     name: str
@@ -120,6 +138,18 @@ TASKS: dict[str, Task] = {
         top_k=20,
         min_p=0.0,
         max_tokens=1024,
+    ),
+    # TeleLogs RCA is a thinking task with long chains of thought (the paper's
+    # traces run into thousands of tokens); it shares AIME's reasoning-mode
+    # sampling and needs a large output budget for the reasoning to complete.
+    "telelogs": Task(
+        name="telelogs",
+        parse=parse_telelogs_answer,
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        min_p=0.0,
+        max_tokens=16384,
     ),
 }
 

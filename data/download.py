@@ -4,6 +4,11 @@
 Usage:
     python data/download.py --dataset ymoslem/AIME-router
     python data/download.py --dataset ymoslem/AIME-router --split train --output data/aime_train.jsonl
+    python data/download.py --dataset netop/TeleLogs --config troubleshooting
+
+Gated datasets (e.g. netop/TeleLogs) need HF auth in the environment
+(`huggingface-cli login` or HF_TOKEN); their rows are not committed to this
+repository.
 """
 
 from __future__ import annotations
@@ -15,6 +20,8 @@ from pathlib import Path
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--dataset", required=True, help="HF dataset id")
+    parser.add_argument("--config", default=None,
+                        help="dataset config/subset name (e.g. 'troubleshooting' for netop/TeleLogs)")
     parser.add_argument("--split", default=None, help="one split; default: all splits")
     parser.add_argument("--output", default=None, help="output path (single split only)")
     parser.add_argument("--output-dir", default="data", help="output directory (all splits)")
@@ -22,7 +29,7 @@ def main() -> None:
 
     from datasets import load_dataset
 
-    dataset = load_dataset(args.dataset)
+    dataset = load_dataset(args.dataset, args.config) if args.config else load_dataset(args.dataset)
     short = args.dataset.split("/")[-1]
 
     splits = [args.split] if args.split else list(dataset.keys())

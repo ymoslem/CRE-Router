@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> None:
         "evaluate",
         help="measure per-cluster accuracy and TPOT for one model (requires [eval] + a running vLLM server)",
     )
-    p.add_argument("--task", required=True, help="dataset task: aime or teleqna")
+    p.add_argument("--task", required=True, help="dataset task: aime, teleqna, or telelogs")
     p.add_argument("--model", required=True, help="served model name (stats key and vLLM model id)")
     p.add_argument("--dataset", required=True, help="JSONL with prompt, answer[, cluster]")
     p.add_argument("--stats-out", required=True, help="stats JSON to create/update")
