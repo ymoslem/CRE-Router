@@ -163,6 +163,19 @@ def cluster_sizes(dataset: list[dict]) -> dict[str, int]:
     return dict(Counter(str(row["cluster"]) for row in dataset))
 
 
+# Optional per-run metrics. TPOT alone cannot price a thinking/non-thinking pool,
+# because both modes decode at the same speed and differ only in how many tokens
+# they emit; E2EL (= TTFT + TPOT x output length) captures that, and unlike
+# request throughput it is per-request, so it adds up correctly across cascade
+# rungs. All are optional so an injected benchmark may supply only TPOT.
+OPTIONAL_METRICS = (
+    "e2el_ms",
+    "request_throughput",
+    "mean_output_tokens",
+    "truncated_frac",
+)
+
+
 @dataclass
 class RunMeasurement:
     """One (cluster, run) benchmark outcome, kept for provenance."""
@@ -172,27 +185,95 @@ class RunMeasurement:
     error: float
     tpot_ms: float
     num_prompts: int
+    e2el_ms: float | None = None
+    request_throughput: float | None = None
+    mean_output_tokens: float | None = None
+    truncated_frac: float | None = None
+
+
+def optional_metrics(
+    result: dict, num_prompts: int, max_output_len: int | None = None
+) -> dict[str, float]:
+    """Pull the optional cost metrics out of a benchmark result, tolerating any
+    that this vLLM version (or an injected fake) does not report.
+
+    ``mean_e2el_ms`` is preferred when present; otherwise it is reconstructed as
+    ``TTFT + TPOT x (output length - 1)``, which is how it is recoverable from
+    the summary block of runs that predate this capture.
+
+    ``max_output_len`` is the task's token cap; when given alongside the
+    per-request ``output_lens``, the fraction of requests that hit the cap is
+    reported as ``truncated_frac``.
+    """
+    metrics: dict[str, float] = {}
+
+    output_tokens = result.get("total_output_tokens")
+    mean_output = float(output_tokens) / num_prompts if output_tokens and num_prompts else None
+    if mean_output is not None:
+        metrics["mean_output_tokens"] = mean_output
+
+    e2el = result.get("mean_e2el_ms")
+    if e2el is None:
+        ttft, tpot = result.get("mean_ttft_ms"), result.get("mean_tpot_ms")
+        if ttft is not None and tpot is not None and mean_output:
+            e2el = float(ttft) + float(tpot) * max(mean_output - 1.0, 0.0)
+    if e2el is not None:
+        metrics["e2el_ms"] = float(e2el)
+
+    throughput = result.get("request_throughput")
+    if throughput is not None:
+        metrics["request_throughput"] = float(throughput)
+
+    # A capped generation corrupts accuracy and understates cost at the same
+    # time, so the truncation rate has to travel with the numbers. vLLM's serve
+    # benchmark does not report a finish reason, but it does return per-request
+    # output_lens; a request that reached the cap was cut off. EOS-terminated
+    # requests stop below the cap, so equality with it is the truncation test.
+    output_lens = result.get("output_lens")
+    if output_lens and max_output_len:
+        truncated = sum(1 for length in output_lens if length >= max_output_len)
+        metrics["truncated_frac"] = truncated / len(output_lens)
+
+    return metrics
 
 
 def aggregate_runs(measurements: list[RunMeasurement]) -> dict[str, dict[str, float]]:
-    """Average error and TPOT across runs, per cluster."""
+    """Average error, TPOT and any available optional metric across runs, per
+    cluster. An optional metric is reported only when every run supplied it."""
     errors: dict[str, list[float]] = defaultdict(list)
     tpots: dict[str, list[float]] = defaultdict(list)
+    extra: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for m in measurements:
         errors[m.cluster].append(m.error)
         tpots[m.cluster].append(m.tpot_ms)
-    return {
-        c: {"error": mean(errors[c]), "tpot_ms": mean(tpots[c])} for c in sorted(errors)
-    }
+        for metric in OPTIONAL_METRICS:
+            value = getattr(m, metric)
+            if value is not None:
+                extra[m.cluster][metric].append(float(value))
+
+    agg = {}
+    for c in sorted(errors):
+        entry = {"error": mean(errors[c]), "tpot_ms": mean(tpots[c])}
+        for metric, values in extra[c].items():
+            if len(values) == len(errors[c]):
+                entry[metric] = mean(values)
+        agg[c] = entry
+    return agg
 
 
 def model_entry(measurements: list[RunMeasurement]) -> dict:
-    """The per-model block for a stats file: per-cluster error and TPOT."""
+    """The per-model block for a stats file: per-cluster error and TPOT, plus any
+    optional metric that every run reported."""
     agg = aggregate_runs(measurements)
-    return {
+    entry = {
         "errors": {c: round(agg[c]["error"], 6) for c in agg},
         "cluster_tpot_ms": {c: round(agg[c]["tpot_ms"], 6) for c in agg},
     }
+    for metric in OPTIONAL_METRICS:
+        present = {c: agg[c][metric] for c in agg if metric in agg[c]}
+        if len(present) == len(agg):
+            entry[f"cluster_{metric}"] = {c: round(v, 6) for c, v in present.items()}
+    return entry
 
 
 def merge_model_into_stats(
@@ -216,18 +297,18 @@ def save_raw_measurements(measurements: list[RunMeasurement], path: str | Path) 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
         for m in sorted(measurements, key=lambda m: (m.cluster, m.run)):
-            f.write(
-                json.dumps(
-                    {
-                        "cluster": m.cluster,
-                        "run": m.run,
-                        "error": round(m.error, 6),
-                        "tpot_ms": round(m.tpot_ms, 6),
-                        "num_prompts": m.num_prompts,
-                    }
-                )
-                + "\n"
-            )
+            record = {
+                "cluster": m.cluster,
+                "run": m.run,
+                "error": round(m.error, 6),
+                "tpot_ms": round(m.tpot_ms, 6),
+                "num_prompts": m.num_prompts,
+            }
+            for metric in OPTIONAL_METRICS:
+                value = getattr(m, metric)
+                if value is not None:
+                    record[metric] = round(float(value), 6)
+            f.write(json.dumps(record) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +367,11 @@ def run_vllm_benchmark(
     args.no_oversample = True
     args.request_rate = float("inf")
     args.burstiness = 1.0
+    # vLLM reports only the metrics named here; its generative default is
+    # "ttft,tpot,itl", which drops e2el entirely (see benchmarks/serve.py,
+    # process_one_metric). Ask for it explicitly so `--cost-metric e2el` reads a
+    # measured value instead of falling back to reconstructing it from means.
+    args.percentile_metrics = "ttft,tpot,itl,e2el"
     args.save_result = False
     # Keep the per-request fields (generated_texts, errors) in the returned
     # dict; without this vLLM strips them for a summary-only result.
@@ -350,6 +436,7 @@ def evaluate_model(
                     error=error,
                     tpot_ms=float(tpot_ms),
                     num_prompts=len(items),
+                    **optional_metrics(result, len(items), task.max_tokens),
                 )
             )
     return measurements

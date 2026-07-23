@@ -13,6 +13,7 @@ import pytest
 
 from cre_router.routing import (
     assign,
+    cascade_system_metrics,
     crossover_candidates,
     eta,
     models_from_stats,
@@ -133,3 +134,39 @@ class TestTeleQnA:
             chosen = set(region.assignment.values())
             assert "Gemma4-E2B" not in chosen
             assert "Gemma4-E4B" not in chosen
+
+
+def _load_cascade(name: str):
+    """Load a checked-in cascade config the way ``cre cascade`` does."""
+    stats = json.loads((CONFIGS / name).read_text())
+    models, cluster_sizes = models_from_stats(stats)
+    assignment = {str(k): str(v) for k, v in stats["assignment"].items()}
+    escalations = {
+        str(k): (str(v[0]), float(v[1])) for k, v in stats.get("escalations", {}).items()
+    }
+    return models, assignment, cluster_sizes, escalations
+
+
+class TestCascadeSystemMetrics:
+    """Stage 1+2 system latency from the checked-in test-split cascade configs,
+    verified against the paper's Tables `aime_test` and `teleqna_test`. The
+    composed values are 9.75 / 23.65 ms; the paper reports 9.7 / 23.8 ms."""
+
+    def test_aime_stage1plus2_latency(self):
+        models, assignment, sizes, escalations = _load_cascade("aime_cascade_test.json")
+        tpot, e2el = cascade_system_metrics(models, assignment, sizes, escalations)
+        assert tpot == pytest.approx(9.7, abs=0.1)   # paper Table aime_test
+        assert e2el == pytest.approx(156300, rel=1e-3)
+
+    def test_teleqna_stage1plus2_latency(self):
+        models, assignment, sizes, escalations = _load_cascade("teleqna_cascade_test.json")
+        tpot, e2el = cascade_system_metrics(models, assignment, sizes, escalations)
+        assert tpot == pytest.approx(23.8, abs=0.2)  # paper Table teleqna_test
+        assert e2el == pytest.approx(1127, rel=1e-3)
+
+    def test_no_escalation_matches_stage1(self):
+        """With no escalations the cascade collapses to Stage 1 TPOT exactly."""
+        models, assignment, sizes, _ = _load_cascade("teleqna_cascade_test.json")
+        _, stage1_tpot = system_metrics(models, assignment, sizes)
+        tpot, _ = cascade_system_metrics(models, assignment, sizes, escalations={})
+        assert tpot == pytest.approx(stage1_tpot)

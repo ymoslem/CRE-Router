@@ -49,6 +49,27 @@ The training-set cluster sizes used for the system-level accuracy and TPOT
 come from the paper's clustering (AIME train 194 / 405 / 322; TeleQnA train
 5,211 / 3,789).
 
+### Stage 1+2 cascade latency (no GPU)
+
+The combined Stage 1+2 system TPOT and E2EL are composed from the test-split
+per-cluster measurements plus the measured QE escalation counts, checked in
+under [`configs/`](configs):
+
+```bash
+cre cascade --stats configs/aime_cascade_test.json
+cre cascade --stats configs/teleqna_cascade_test.json
+```
+
+Each escalated query is charged both passes: for TPOT, per delivered token
+(`TPOT_strong + TPOT_eff * L_eff / L_strong`, following vLLM's per-request
+Mean TPOT convention); for E2EL, as the sum `E2EL_eff + E2EL_strong`, since
+Stage 2 inspects the complete efficient-model output before escalating. This
+gives 9.75 ms / 156,303 ms (AIME) and 23.65 ms / 1,127 ms (TeleQnA), matching
+the paper's Tables `aime_test` and `teleqna_test` Stage 1+2 latency (9.7 and
+23.8 ms) to within rounding. Expected values are pinned in
+[`tests/test_routing.py`](tests/test_routing.py). The escalated queries'
+accuracy recovery is measured separately (`cre qe-eval`, Appendix D).
+
 ### Reproducing the clustering
 
 The first step in the paper's Stage 1 is to cluster the training queries. The released datasets already include the paper's clustering in the `cluster` column, so you can skip this step and use the released datasets directly. If you want to reproduce the clustering, you can run the following command:

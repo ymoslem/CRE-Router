@@ -21,6 +21,7 @@ from pathlib import Path
 from cre_router.artifacts import RouterArtifacts
 from cre_router.clustering import DEFAULT_EMBEDDING_MODEL
 from cre_router.routing import (
+    cascade_system_metrics,
     eta,
     models_from_stats,
     pareto_prune,
@@ -83,13 +84,18 @@ def cmd_cluster(args: argparse.Namespace) -> None:
 
 def cmd_fit(args: argparse.Namespace) -> None:
     stats = json.loads(Path(args.stats).read_text())
-    models, cluster_sizes = models_from_stats(stats)
+    models, cluster_sizes = models_from_stats(stats, args.cost_metric)
 
     efficient, dominated = pareto_prune(models)
-    print("Pareto analysis:")
-    for m in sorted(models, key=lambda m: m.tpot_ms):
+    label = args.cost_metric.upper()
+    # eta is accuracy points per millisecond of cost. That reads well for TPOT
+    # (single-digit ms) but collapses to 0.00 for E2EL, whose costs run to
+    # hundreds of thousands of ms, so E2EL is reported per second instead.
+    eta_scale, eta_unit = (1000.0, "pp/s") if args.cost_metric == "e2el" else (1.0, "pp/ms")
+    print(f"Pareto analysis (cost = {label}):")
+    for m in sorted(models, key=lambda m: m.cost_ms):
         status = "dominated" if m in dominated else "efficient"
-        print(f"  {m.name:<24} TPOT {m.tpot_ms:7.3f} ms  {status}")
+        print(f"  {m.name:<24} {label} {m.cost_ms:10.3f} ms  {status}")
     if dominated:
         print(f"Pruned {len(dominated)} dominated model(s); "
               f"routing over: {[m.name for m in efficient]}")
@@ -97,21 +103,23 @@ def cmd_fit(args: argparse.Namespace) -> None:
     clusters = sorted(cluster_sizes)
     print(f"\nRouting regions (lambda sweep) over clusters {clusters}:")
     header = f"  {'lambda range':>16}  " + "  ".join(f"{('C' + c):>24}" for c in clusters) \
-        + f"  {'Acc':>7}  {'TPOT':>8}  {'eta':>6}"
+        + f"  {'Acc':>7}  {label:>11}  {('eta ' + eta_unit):>10}"
     print(header)
     for region in routing_regions(efficient):
-        acc, tpot = system_metrics(efficient, region.assignment, cluster_sizes)
+        acc, cost = system_metrics(efficient, region.assignment, cluster_sizes)
         e = eta(efficient, region.assignment, cluster_sizes)
         row = f"  {region.interval_str:>16}  " + "  ".join(
             f"{region.assignment[c]:>24}" for c in clusters
-        ) + f"  {acc:>6.1%}  {tpot:>6.1f}ms  " + (f"{e:>6.2f}" if e is not None else "   ---")
+        ) + f"  {acc:>6.1%}  {cost:>9.1f}ms  " + (
+            f"{e * eta_scale:>10.3f}" if e is not None else f"{'---':>10}")
         print(row)
 
     selection = select_lambda(efficient, cluster_sizes, args.budget)
-    print(f"\nBudget B = {args.budget} ms  ->  lambda* = {selection.lambda_star}")
+    print(f"\nBudget B = {args.budget} ms {label}  ->  lambda* = {selection.lambda_star}")
     print(f"  assignment: {selection.region.assignment}")
-    print(f"  training accuracy {selection.accuracy:.1%} at {selection.tpot_ms:.1f} ms TPOT"
-          + (f", eta {selection.eta:.2f} pp/ms" if selection.eta is not None else ""))
+    print(f"  training accuracy {selection.accuracy:.1%} at {selection.tpot_ms:.1f} ms {label}"
+          + (f", eta {selection.eta * eta_scale:.3f} {eta_unit}"
+             if selection.eta is not None else ""))
 
     if args.output:
         out_dir = Path(args.output)
@@ -126,6 +134,27 @@ def cmd_fit(args: argparse.Namespace) -> None:
         artifacts.stats = stats
         artifacts.save(out_dir)
         print(f"Saved routing table to {out_dir}/router.json")
+
+
+def cmd_cascade(args: argparse.Namespace) -> None:
+    stats = json.loads(Path(args.stats).read_text())
+    models, cluster_sizes = models_from_stats(stats)
+    assignment = {str(k): str(v) for k, v in stats["assignment"].items()}
+    escalations = {
+        str(k): (str(v[0]), float(v[1])) for k, v in stats.get("escalations", {}).items()
+    }
+    tpot, e2el = cascade_system_metrics(models, assignment, cluster_sizes, escalations)
+
+    clusters = sorted(cluster_sizes)
+    print(f"Stage 1+2 cascade over clusters {clusters}:")
+    for c in clusters:
+        line = f"  C{c} ({int(cluster_sizes[c])} queries) -> {assignment[c]}"
+        if c in escalations:
+            model, count = escalations[c]
+            line += f", escalate {count:g} -> {model}"
+        print(line)
+    print(f"\n  system TPOT: {tpot:.2f} ms")
+    print(f"  system E2EL: {e2el:.0f} ms")
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
@@ -258,9 +287,24 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("fit", help="compute the routing table from model stats")
     p.add_argument("--stats", required=True, help="JSON stats file (see configs/)")
-    p.add_argument("--budget", type=float, required=True, help="TPOT budget B in ms")
+    p.add_argument("--budget", type=float, required=True,
+                   help="cost budget B in ms, in the units of --cost-metric")
+    p.add_argument("--cost-metric", choices=("tpot", "e2el"), default="tpot",
+                   help="measurement used as Cost: 'tpot' (default, reproduces the "
+                        "published results) or 'e2el' end-to-end request latency, "
+                        "needed when pool members differ in output length rather "
+                        "than decode speed, such as a thinking/non-thinking pair")
     p.add_argument("--output", default=None, help="artifacts directory to update")
     p.set_defaults(func=cmd_fit)
+
+    p = sub.add_parser(
+        "cascade",
+        help="Stage 1+2 system latency (TPOT and E2EL) from measured stats",
+    )
+    p.add_argument("--stats", required=True,
+                   help="cascade stats JSON with assignment and escalations "
+                        "(see configs/*_cascade_test.json)")
+    p.set_defaults(func=cmd_cascade)
 
     p = sub.add_parser(
         "qe-train",
