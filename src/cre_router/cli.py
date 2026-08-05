@@ -21,6 +21,8 @@ from pathlib import Path
 from cre_router.artifacts import RouterArtifacts
 from cre_router.clustering import DEFAULT_EMBEDDING_MODEL
 from cre_router.routing import (
+    cascade_system_accuracy,
+    cascade_system_metrics,
     eta,
     models_from_stats,
     pareto_prune,
@@ -83,13 +85,18 @@ def cmd_cluster(args: argparse.Namespace) -> None:
 
 def cmd_fit(args: argparse.Namespace) -> None:
     stats = json.loads(Path(args.stats).read_text())
-    models, cluster_sizes = models_from_stats(stats)
+    models, cluster_sizes = models_from_stats(stats, args.cost_metric)
 
     efficient, dominated = pareto_prune(models)
-    print("Pareto analysis:")
-    for m in sorted(models, key=lambda m: m.tpot_ms):
+    label = args.cost_metric.upper()
+    # eta is accuracy points per millisecond of cost. That reads well for TPOT
+    # (single-digit ms) but collapses to 0.00 for E2EL, whose costs run to
+    # hundreds of thousands of ms, so E2EL is reported per second instead.
+    eta_scale, eta_unit = (1000.0, "pp/s") if args.cost_metric == "e2el" else (1.0, "pp/ms")
+    print(f"Pareto analysis (cost = {label}):")
+    for m in sorted(models, key=lambda m: m.cost_ms):
         status = "dominated" if m in dominated else "efficient"
-        print(f"  {m.name:<24} TPOT {m.tpot_ms:7.3f} ms  {status}")
+        print(f"  {m.name:<24} {label} {m.cost_ms:10.3f} ms  {status}")
     if dominated:
         print(f"Pruned {len(dominated)} dominated model(s); "
               f"routing over: {[m.name for m in efficient]}")
@@ -97,21 +104,23 @@ def cmd_fit(args: argparse.Namespace) -> None:
     clusters = sorted(cluster_sizes)
     print(f"\nRouting regions (lambda sweep) over clusters {clusters}:")
     header = f"  {'lambda range':>16}  " + "  ".join(f"{('C' + c):>24}" for c in clusters) \
-        + f"  {'Acc':>7}  {'TPOT':>8}  {'eta':>6}"
+        + f"  {'Acc':>7}  {label:>11}  {('eta ' + eta_unit):>10}"
     print(header)
     for region in routing_regions(efficient):
-        acc, tpot = system_metrics(efficient, region.assignment, cluster_sizes)
+        acc, cost = system_metrics(efficient, region.assignment, cluster_sizes)
         e = eta(efficient, region.assignment, cluster_sizes)
         row = f"  {region.interval_str:>16}  " + "  ".join(
             f"{region.assignment[c]:>24}" for c in clusters
-        ) + f"  {acc:>6.1%}  {tpot:>6.1f}ms  " + (f"{e:>6.2f}" if e is not None else "   ---")
+        ) + f"  {acc:>6.1%}  {cost:>9.1f}ms  " + (
+            f"{e * eta_scale:>10.3f}" if e is not None else f"{'---':>10}")
         print(row)
 
     selection = select_lambda(efficient, cluster_sizes, args.budget)
-    print(f"\nBudget B = {args.budget} ms  ->  lambda* = {selection.lambda_star}")
+    print(f"\nBudget B = {args.budget} ms {label}  ->  lambda* = {selection.lambda_star}")
     print(f"  assignment: {selection.region.assignment}")
-    print(f"  training accuracy {selection.accuracy:.1%} at {selection.tpot_ms:.1f} ms TPOT"
-          + (f", eta {selection.eta:.2f} pp/ms" if selection.eta is not None else ""))
+    print(f"  training accuracy {selection.accuracy:.1%} at {selection.tpot_ms:.1f} ms {label}"
+          + (f", eta {selection.eta * eta_scale:.3f} {eta_unit}"
+             if selection.eta is not None else ""))
 
     if args.output:
         out_dir = Path(args.output)
@@ -126,6 +135,37 @@ def cmd_fit(args: argparse.Namespace) -> None:
         artifacts.stats = stats
         artifacts.save(out_dir)
         print(f"Saved routing table to {out_dir}/router.json")
+
+
+def cmd_cascade(args: argparse.Namespace) -> None:
+    stats = json.loads(Path(args.stats).read_text())
+    models, cluster_sizes = models_from_stats(stats)
+    assignment = {str(k): str(v) for k, v in stats["assignment"].items()}
+    escalations = {
+        str(k): (str(v[0]), float(v[1])) for k, v in stats.get("escalations", {}).items()
+    }
+    tpot, e2el = cascade_system_metrics(models, assignment, cluster_sizes, escalations)
+    # Per-cluster cascade accuracy (efficient outputs gated by the QE classifier,
+    # rejects escalated to the strong model), produced by the QE cascade step.
+    # Clusters absent route entirely to their Stage 1 model.
+    cascade_accuracy = {str(k): float(v) for k, v in stats.get("cascade_accuracy", {}).items()}
+
+    clusters = sorted(cluster_sizes)
+    print(f"Stage 1+2 cascade over clusters {clusters}:")
+    for c in clusters:
+        line = f"  C{c} ({int(cluster_sizes[c])} queries) -> {assignment[c]}"
+        if c in escalations:
+            model, count = escalations[c]
+            line += f", escalate {count:g} -> {model}"
+        if c in cascade_accuracy:
+            line += f"  (cascade acc {cascade_accuracy[c]:.3f})"
+        print(line)
+
+    stage1_acc, _ = system_metrics(models, assignment, cluster_sizes)
+    system_acc = cascade_system_accuracy(models, assignment, cluster_sizes, cascade_accuracy)
+    print(f"\n  system accuracy: {system_acc:.3f}  (Stage 1 alone: {stage1_acc:.3f})")
+    print(f"  system TPOT:     {tpot:.2f} ms")
+    print(f"  system E2EL:     {e2el:.0f} ms")
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
@@ -159,6 +199,15 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         f"benchmark at {args.host}:{args.port}"
     )
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_model = args.model.replace("/", "_")
+    stem = f"{args.task}_{safe_model}_{timestamp}"
+    outcomes_path = Path(args.results_dir) / f"{stem}_outcomes.jsonl"
+    generations_path = (
+        Path(args.results_dir) / f"{stem}_generations.jsonl"
+        if getattr(args, "save_generations", False)
+        else None
+    )
     measurements = evaluate_model(
         dataset,
         model=args.model,
@@ -170,11 +219,11 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         base_seed=args.seed,
         workdir=Path(args.results_dir) / "splits",
         download_dir=args.download_dir,
+        outcomes_out=outcomes_path,
+        generations_out=generations_path,
     )
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_model = args.model.replace("/", "_")
-    raw_path = Path(args.results_dir) / f"{args.task}_{safe_model}_{timestamp}.jsonl"
+    raw_path = Path(args.results_dir) / f"{stem}.jsonl"
     save_raw_measurements(measurements, raw_path)
 
     entry = model_entry(measurements)
@@ -182,12 +231,22 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     merge_model_into_stats(args.stats_out, args.model, entry, sizes)
 
     print(f"\nPer-cluster results for {args.model}:")
+    e2el = entry.get("cluster_e2el_ms", {})
+    trunc = entry.get("cluster_truncated_frac", {})
     for c in sorted(entry["errors"]):
-        print(
+        line = (
             f"  C{c}: error {entry['errors'][c]:.3f}  "
             f"TPOT {entry['cluster_tpot_ms'][c]:.3f} ms"
         )
+        if c in e2el:
+            line += f"  E2EL {e2el[c]:.0f} ms"
+        if c in trunc:
+            line += f"  trunc {trunc[c]:.2f}"
+        print(line)
     print(f"\nRaw measurements: {raw_path}")
+    print(f"Per-question:     {outcomes_path}")
+    if generations_path is not None:
+        print(f"Generations:      {generations_path}")
     print(f"Updated stats:    {args.stats_out}")
 
 
@@ -210,6 +269,44 @@ def cmd_qe_train(args: argparse.Namespace, extra: list[str]) -> None:
     from cre_router.qe.train import main as qe_train_main
 
     qe_train_main(extra)
+
+
+def cmd_qe_cascade(args: argparse.Namespace) -> None:
+    from cre_router.qe import QEClassifier
+    from cre_router.qe.cascade import (
+        compose_cascade,
+        run_qe,
+        strong_correct_by_qid,
+        write_cascade_stats,
+    )
+
+    generations = _read_jsonl(Path(args.generations))
+    if args.clusters:
+        keep = set(args.clusters.split(","))
+        generations = [g for g in generations if str(g["cluster"]) in keep]
+    if not generations:
+        raise SystemExit("no generations to score (check --generations and --clusters)")
+    strong = strong_correct_by_qid(_read_jsonl(Path(args.strong_outcomes)))
+
+    classifier = QEClassifier(
+        model_name=args.classifier,
+        base_tokenizer=args.base_tokenizer,
+        accept_threshold=args.accept_threshold,
+        max_length=args.max_length,
+    )
+    escalate = run_qe(classifier, generations, batch_size=args.batch_size)
+    report = compose_cascade(generations, escalate, strong)
+
+    print(f"QE cascade over {len(generations)} generations, escalating to {args.strong_model}:")
+    for cluster in sorted(report):
+        r = report[cluster]
+        print(
+            f"  C{cluster} (n={r['n']}): cascade acc {r['cascade_accuracy']:.3f}, "
+            f"escalate {r['escalations']:g}/run"
+        )
+    if args.out:
+        write_cascade_stats(args.out, args.strong_model, report)
+        print(f"\nUpdated {args.out} (escalations + cascade_accuracy); run `cre cascade --stats {args.out}`")
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
@@ -254,13 +351,33 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--seed", type=int, default=0, help="base seed; run r uses seed+r")
     p.add_argument("--download-dir", default=None, help="vLLM model download/cache directory")
     p.add_argument("--results-dir", default="results", help="where to write raw measurements and cluster splits")
+    p.add_argument(
+        "--save-generations",
+        action="store_true",
+        help="also write per-question full_output + num_tokens (QE training data); off by default",
+    )
     p.set_defaults(func=cmd_evaluate)
 
     p = sub.add_parser("fit", help="compute the routing table from model stats")
     p.add_argument("--stats", required=True, help="JSON stats file (see configs/)")
-    p.add_argument("--budget", type=float, required=True, help="TPOT budget B in ms")
+    p.add_argument("--budget", type=float, required=True,
+                   help="cost budget B in ms, in the units of --cost-metric")
+    p.add_argument("--cost-metric", choices=("tpot", "e2el"), default="tpot",
+                   help="measurement used as Cost: 'tpot' (default, reproduces the "
+                        "published results) or 'e2el' end-to-end request latency, "
+                        "needed when pool members differ in output length rather "
+                        "than decode speed, such as a thinking/non-thinking pair")
     p.add_argument("--output", default=None, help="artifacts directory to update")
     p.set_defaults(func=cmd_fit)
+
+    p = sub.add_parser(
+        "cascade",
+        help="Stage 1+2 system latency (TPOT and E2EL) from measured stats",
+    )
+    p.add_argument("--stats", required=True,
+                   help="cascade stats JSON with assignment and escalations "
+                        "(see configs/*_cascade_test.json)")
+    p.set_defaults(func=cmd_cascade)
 
     p = sub.add_parser(
         "qe-train",
@@ -273,6 +390,27 @@ def main(argv: list[str] | None = None) -> None:
         help="evaluate a trained QE classifier on a split (all flags forwarded, see --help)",
         add_help=False,
     )
+
+    p = sub.add_parser(
+        "qe-cascade",
+        help="run the QE classifier over an efficient model's generations and "
+             "compose per-cluster cascade accuracy + escalation counts (requires [qe])",
+    )
+    p.add_argument("--classifier", required=True, help="trained QE checkpoint")
+    p.add_argument("--generations", required=True,
+                   help="efficient model's *_generations.jsonl (qid, cluster, run, correct, full_output, num_tokens)")
+    p.add_argument("--strong-outcomes", required=True,
+                   help="strong model's *_outcomes.jsonl or *_generations.jsonl (qid, correct)")
+    p.add_argument("--strong-model", required=True, help="strong model name recorded in the escalations")
+    p.add_argument("--clusters", default=None, help="comma-separated clusters to cascade (default: all present)")
+    p.add_argument("--out", default=None, help="cascade stats JSON to update in place with the Stage 2 fields")
+    p.add_argument("--base-tokenizer", default=None,
+                   help="defaults to the checkpoint itself, which ships its own tokenizer; "
+                        "give a base model id only for a checkpoint saved without one")
+    p.add_argument("--max-length", type=int, default=4096, help="4096 for long reasoning, 512 for short MCQ")
+    p.add_argument("--accept-threshold", type=float, default=0.5)
+    p.add_argument("--batch-size", type=int, default=32)
+    p.set_defaults(func=cmd_qe_cascade)
 
     p = sub.add_parser("serve", help="run the cascade router")
     p.add_argument("--config", required=True, help="YAML serving config")

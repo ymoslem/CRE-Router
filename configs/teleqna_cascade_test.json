@@ -1,0 +1,21 @@
+{
+  "_comment": "TeleQnA test set, Stage 1+2 cascade inputs. Per-cluster TPOT, E2EL and output length are measured on the test split (2xA100, vLLM, concurrency 32, 5-run mean). assignment is the lambda*=0.07 routing from `cre fit` on the training stats; escalations are the measured QE escalation counts (Table teleqna_qe_runs); cascade_accuracy is the measured per-cluster accuracy after the QE cascade on C0. `cre cascade` gives system accuracy 0.743, 23.65 ms TPOT and 1127 ms E2EL, matching the paper's Table teleqna_test (74.3%, 23.8 ms) to within rounding.",
+  "cluster_sizes": {"0": 590, "1": 410},
+  "assignment": {"0": "Qwen3-4B", "1": "Gemma4-26B"},
+  "escalations": {"0": ["Gemma4-26B", 202]},
+  "cascade_accuracy": {"0": 0.740},
+  "models": {
+    "Qwen3-4B": {
+      "errors": {"0": 0.311, "1": 0.360},
+      "cluster_tpot_ms": {"0": 15.484, "1": 14.664},
+      "cluster_e2el_ms": {"0": 663.93, "1": 696.12},
+      "cluster_output_tokens": {"0": 39.5, "1": 43.8}
+    },
+    "Gemma4-26B": {
+      "errors": {"0": 0.223, "1": 0.254},
+      "cluster_tpot_ms": {"0": 24.565, "1": 24.412},
+      "cluster_e2el_ms": {"0": 1206.13, "1": 1199.61},
+      "cluster_output_tokens": {"0": 46.3, "1": 46.2}
+    }
+  }
+}

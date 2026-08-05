@@ -49,6 +49,27 @@ The training-set cluster sizes used for the system-level accuracy and TPOT
 come from the paper's clustering (AIME train 194 / 405 / 322; TeleQnA train
 5,211 / 3,789).
 
+### Stage 1+2 cascade latency (no GPU)
+
+The combined Stage 1+2 system TPOT and E2EL are composed from the test-split
+per-cluster measurements plus the measured QE escalation counts, checked in
+under [`configs/`](configs):
+
+```bash
+cre cascade --stats configs/aime_cascade_test.json
+cre cascade --stats configs/teleqna_cascade_test.json
+```
+
+Each escalated query is charged both passes: for TPOT, per delivered token
+(`TPOT_strong + TPOT_eff * L_eff / L_strong`, following vLLM's per-request
+Mean TPOT convention); for E2EL, as the sum `E2EL_eff + E2EL_strong`, since
+Stage 2 inspects the complete efficient-model output before escalating. This
+gives 9.75 ms / 156,303 ms (AIME) and 23.65 ms / 1,127 ms (TeleQnA), matching
+the paper's Tables `aime_test` and `teleqna_test` Stage 1+2 latency (9.7 and
+23.8 ms) to within rounding. Expected values are pinned in
+[`tests/test_routing.py`](tests/test_routing.py). The escalated queries'
+accuracy recovery is measured separately (`cre qe-eval`, Appendix D).
+
 ### Reproducing the clustering
 
 The first step in the paper's Stage 1 is to cluster the training queries. The released datasets already include the paper's clustering in the `cluster` column, so you can skip this step and use the released datasets directly. If you want to reproduce the clustering, you can run the following command:
@@ -114,6 +135,29 @@ cre qe-eval --classifier <checkpoint> --dataset ymoslem/AIME-clustered-output \
 (true / unnecessary / missed escalations) used in the QE appendices. For
 TeleQnA use `--max-length 512` and learning rate 2e-5.
 
+### Building QE data for a new pool
+
+For a pool other than the released ones, the QE data comes from the efficient
+model's own generations:
+
+```bash
+# capture generations alongside the per-question outcomes
+cre evaluate ... --save-generations
+
+# convert them to the schema cre qe-train reads
+python data/prep_qe.py --train <train_generations.jsonl> \
+    --test <test_generations.jsonl> --out qe-data/<name>
+
+# replay a trained classifier over the gated clusters
+cre qe-cascade --classifier <checkpoint> --generations <test_generations.jsonl> \
+    --clusters 1,3 --strong-outcomes <strong_outcomes.jsonl> \
+    --strong-model <name> --out configs/<pool>_cascade_test.json
+```
+
+`--save-generations` adds the full outputs the classifier judges; per-question
+outcomes are always written. `cre qe-cascade` writes the per-cluster cascade
+accuracy and escalation counts into the cascade config that `cre cascade` reads.
+
 ## Serving the paper's pools
 
 Two ready-made serving configs are provided:
@@ -142,15 +186,15 @@ Fetch any split as JSONL with `python data/download.py --dataset <id>`.
 
 ## Pinned environment
 
-The exact environment used to produce the reported TPOT and accuracy numbers
-is pinned in [`requirements-paper.txt`](requirements-paper.txt) (vLLM 0.19.0,
-torch 2.10.0, Python 3.11, 2x A100 SXM 80 GB). This is a historical record, not
-a recommended version. TPOT is hardware- and version-specific and will shift on
+Package versions are pinned in
+[`requirements-paper.txt`](requirements-paper.txt). The reported numbers were
+measured on 2x A100 SXM 80 GB under Python 3.11 with 32 concurrent requests,
+averaged over 5 runs. TPOT is hardware- and version-specific and will shift on
 newer vLLM releases or different hardware (e.g. H100 with full W8A8 FP8
 support), which can also change the selected $\lambda^*$. Efficient ModernBERT
 training additionally used `flash-attn==2.8.3`.
 
-Install order matters for the Gemma models: `pip install vllm==0.19.0` pulls
+Install order matters for the Gemma models: installing the pinned vLLM pulls
 transformers 4.57.6, which does **not** recognize the `gemma4` architecture.
 Upgrade with `pip install transformers==5.5.3` afterwards (it serves both the
 Qwen and Gemma pools; vLLM's `transformers<5` pin is conservative).

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from cre_router.textutils import split_thinking
+
 ROUTE, ACCEPT = 0, 1
 CLASS_NAMES = ("Route", "Accept")
 
@@ -24,9 +26,20 @@ def format_qe_input(
 ) -> str:
     """Training/inference input format: ``query [SEP] output [SEP] num_tokens``.
 
-    Including the output length gives the classifier direct access to
-    chain-of-thought length, a proxy for model confidence.
+    The reasoning block is dropped first (``split_thinking``, all model families)
+    so the classifier sees the delivered answer, not the chain of thought -- the
+    thinking is not part of the output. ``num_tokens`` still reflects the *full*
+    generation length (the real serving cost), giving the classifier direct
+    access to output length as a proxy for model confidence. The output is then
+    truncated to its last ``max_output_words`` words.
     """
+    if num_tokens is None:
+        raise ValueError(
+            "num_tokens is None: the generation length is required for the QE input "
+            "(a generations file written without output_lens). Build the dataset via "
+            "prep_qe, which drops such rows, or re-run the benchmark so output_lens is present."
+        )
+    output = split_thinking(output)
     words = output.split()
     if len(words) > max_output_words:
         output = " ".join(words[-max_output_words:])

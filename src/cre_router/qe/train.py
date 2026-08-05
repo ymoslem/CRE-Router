@@ -74,7 +74,24 @@ def main(argv: list[str] | None = None) -> None:
 
     set_seed(args.seed)
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
-    dataset = load_dataset(args.dataset, cache_dir=args.cache_dir)
+    # A local directory of {train,test}.jsonl (from `python -m cre_router.data.prep_qe`)
+    # loads via the json builder; anything else is a Hub dataset id.
+    from pathlib import Path as _Path
+
+    if _Path(args.dataset).is_dir():
+        # Only the split files themselves; a dir may also hold sidecar jsonl (e.g.
+        # cascade_test_gens.jsonl) with a different schema that would break the
+        # single-schema json builder if globbed in.
+        data_files = {
+            p.stem: str(p)
+            for p in sorted(_Path(args.dataset).glob("*.jsonl"))
+            if p.stem.startswith(("train", "test"))
+        }
+        if not data_files:
+            raise SystemExit(f"{args.dataset} is a directory but has no train*/test* .jsonl splits")
+        dataset = load_dataset("json", data_files=data_files, cache_dir=args.cache_dir)
+    else:
+        dataset = load_dataset(args.dataset, cache_dir=args.cache_dir)
 
     train_split = args.train_split or next(s for s in dataset if s.startswith("train"))
     eval_split = args.eval_split or next(s for s in dataset if s.startswith("test"))
