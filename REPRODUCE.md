@@ -163,15 +163,15 @@ Fetch any split as JSONL with `python data/download.py --dataset <id>`.
 
 ## Pinned environment
 
-The exact environment used to produce the reported TPOT and accuracy numbers
-is pinned in [`requirements-paper.txt`](requirements-paper.txt) (vLLM 0.19.0,
-torch 2.10.0, Python 3.11, 2x A100 SXM 80 GB). This is a historical record, not
-a recommended version. TPOT is hardware- and version-specific and will shift on
+Package versions are pinned in
+[`requirements-paper.txt`](requirements-paper.txt). The reported numbers were
+measured on 2x A100 SXM 80 GB under Python 3.11 with 32 concurrent requests,
+averaged over 5 runs. TPOT is hardware- and version-specific and will shift on
 newer vLLM releases or different hardware (e.g. H100 with full W8A8 FP8
 support), which can also change the selected $\lambda^*$. Efficient ModernBERT
 training additionally used `flash-attn==2.8.3`.
 
-Install order matters for the Gemma models: `pip install vllm==0.19.0` pulls
+Install order matters for the Gemma models: installing the pinned vLLM pulls
 transformers 4.57.6, which does **not** recognize the `gemma4` architecture.
 Upgrade with `pip install transformers==5.5.3` afterwards (it serves both the
 Qwen and Gemma pools; vLLM's `transformers<5` pin is conservative).
