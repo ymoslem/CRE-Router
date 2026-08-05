@@ -41,11 +41,33 @@ class TestAnswerParsing:
     def test_strips_thinking_block(self):
         assert split_thinking("<think>99 is wrong</think> Answer: 3") == "Answer: 3"
 
+    def test_strips_gemma4_channel_block(self):
+        # Gemma 4's marker pair, distinct from Qwen's <think>...</think>.
+        text = "<|channel>thought\nmaybe 99\n<channel|> Answer: 3"
+        assert split_thinking(text) == "Answer: 3"
+
+    def test_no_marker_passes_through(self):
+        # Gemma 4's E2B/E4B variants emit no channel markers at all when
+        # thinking is disabled, unlike Qwen (always <think></think>) and
+        # unlike Gemma 4's own larger siblings (empty channel block).
+        assert split_thinking("Answer: 3") == "Answer: 3"
+
     def test_aime_ignores_reasoning_numbers(self):
         assert parse_aime_answer("<think>try 500 then 600</think>\\boxed{7}") == 7
 
     def test_teleqna_answer_label(self):
         assert parse_teleqna_answer("Explanation: foo\nAnswer: 2") == 2
+
+
+class TestGemma4TaskWiring:
+    def test_gemma4_tasks_are_pre_rendered(self):
+        # Only the Gemma 4 arms bake enable_thinking into the prompt text;
+        # every other task lets the benchmark apply the chat template.
+        assert TASKS["telemath_gemma4"].pre_rendered
+        pre_rendered = {"telemath_gemma4"}
+        for name, task in TASKS.items():
+            if name not in pre_rendered:
+                assert not task.pre_rendered, name
 
 
 class TestAnswersMatch:
@@ -149,6 +171,132 @@ class TestEvaluateModelWithFakeBenchmark:
         assert entry["cluster_tpot_ms"]["0"] == pytest.approx(10.5)
         # seed advances per run
         assert sorted({seed for _, seed, _ in calls}) == [0, 1]
+
+    def test_per_question_outcomes_saved(self, tmp_path):
+        dataset = [
+            {"id": "a", "prompt": "q0", "answer": 1, "cluster": 0},
+            {"id": "b", "prompt": "q1", "answer": 2, "cluster": 0},
+            {"id": "c", "prompt": "q2", "answer": 9, "cluster": 1},
+        ]
+
+        def fake_benchmark(dataset_path, model, task, *, host, port, max_concurrency, seed, download_dir):
+            rows = [json.loads(line) for line in open(dataset_path)]
+            replies = {"q0": "Answer: 1", "q1": "Answer: 3", "q2": "Answer: 9"}
+            return {
+                "generated_texts": [replies[r["prompt"]] for r in rows],
+                "mean_tpot_ms": 10.0,
+                "output_lens": [5] * len(rows),
+            }
+
+        out = tmp_path / "outcomes.jsonl"
+        evaluate_model(
+            dataset, model="m", task=TASKS["teleqna"], runs=2,
+            workdir=tmp_path / "splits", benchmark=fake_benchmark, outcomes_out=out,
+        )
+        recs = [json.loads(line) for line in open(out)]
+        assert len(recs) == 3 * 2  # questions x runs
+        for r in recs:
+            assert set(r) == {"qid", "cluster", "run", "correct", "output_len"}
+            assert r["output_len"] == 5
+        by_qid: dict = {}
+        for r in recs:
+            by_qid.setdefault(r["qid"], []).append(r["correct"])
+        assert by_qid["a"] == [True, True]   # q0 -> 1 correct
+        assert by_qid["b"] == [False, False]  # q1 -> 3 wrong
+        assert by_qid["c"] == [True, True]   # q2 -> 9 correct
+        assert sorted({r["run"] for r in recs}) == [0, 1]
+
+    def test_generations_saved(self, tmp_path):
+        dataset = [
+            {"id": "a", "prompt": "q0", "answer": 1, "cluster": 0},
+            {"id": "b", "prompt": "q1", "answer": 2, "cluster": 0},
+            {"id": "c", "prompt": "q2", "answer": 9, "cluster": 1},
+        ]
+
+        def fake_benchmark(dataset_path, model, task, *, host, port, max_concurrency, seed, download_dir):
+            rows = [json.loads(line) for line in open(dataset_path)]
+            replies = {"q0": "Answer: 1", "q1": "Answer: 3", "q2": "Answer: 9"}
+            return {
+                "generated_texts": [replies[r["prompt"]] for r in rows],
+                "mean_tpot_ms": 10.0,
+                "output_lens": [7] * len(rows),
+            }
+
+        gens = tmp_path / "generations.jsonl"
+        evaluate_model(
+            dataset, model="m", task=TASKS["teleqna"], runs=1,
+            workdir=tmp_path / "splits", benchmark=fake_benchmark, generations_out=gens,
+        )
+        recs = [json.loads(line) for line in open(gens)]
+        assert len(recs) == 3  # questions x 1 run
+        for r in recs:
+            assert set(r) == {
+                "qid", "cluster", "run", "question", "prompt", "ground_truth_answer",
+                "answer", "full_output", "num_tokens", "correct",
+            }
+            assert r["num_tokens"] == 7
+        by_qid = {r["qid"]: r for r in recs}
+        # no explicit question field -> falls back to the (raw) prompt
+        assert by_qid["a"]["question"] == "q0" and by_qid["a"]["prompt"] == "q0"
+        # a: gold 1, model says "Answer: 1" -> parsed 1, correct
+        assert by_qid["a"]["full_output"] == "Answer: 1" and by_qid["a"]["correct"] is True
+        assert by_qid["a"]["ground_truth_answer"] == 1 and by_qid["a"]["answer"] == 1
+        # b: gold 2, model says "Answer: 3" -> parsed 3, wrong
+        assert by_qid["b"]["correct"] is False
+        assert by_qid["b"]["ground_truth_answer"] == 2 and by_qid["b"]["answer"] == 3
+
+    def test_generations_question_is_raw_for_prerendered(self, tmp_path):
+        # a pre_rendered item carries the templated text in `prompt` and the raw
+        # query in `question`; generations must store the raw question for the QE.
+        dataset = [
+            {"id": "a", "question": "what is 2+2?",
+             "prompt": "<start>what is 2+2?<gen>", "answer": 4, "cluster": 0},
+        ]
+
+        def fake_benchmark(dataset_path, model, task, **kw):
+            rows = [json.loads(line) for line in open(dataset_path)]
+            return {"generated_texts": ["Answer: 4"] * len(rows),
+                    "mean_tpot_ms": 10.0, "output_lens": [5] * len(rows)}
+
+        gens = tmp_path / "g.jsonl"
+        evaluate_model(
+            dataset, model="m", task=TASKS["teleqna"], runs=1,
+            workdir=tmp_path / "s", benchmark=fake_benchmark, generations_out=gens,
+        )
+        r = json.loads(open(gens).readline())
+        assert r["question"] == "what is 2+2?"          # raw, QE-facing
+        assert r["prompt"] == "<start>what is 2+2?<gen>"  # exact served input
+
+    def test_generations_off_by_default(self, tmp_path):
+        def fake_benchmark(dataset_path, model, task, **kw):
+            rows = [json.loads(line) for line in open(dataset_path)]
+            return {"generated_texts": ["Answer: 1"] * len(rows), "mean_tpot_ms": 10.0}
+
+        # default generations_out=None: no file, no error
+        evaluate_model(
+            [{"prompt": "q", "answer": 1, "cluster": 0}], model="m",
+            task=TASKS["teleqna"], runs=1, workdir=tmp_path / "splits",
+            benchmark=fake_benchmark,
+        )
+
+    def test_question_id_uses_id_then_hash(self):
+        from cre_router.evaluate import question_id
+        assert question_id({"id": 7, "prompt": "x"}) == "7"
+        h = question_id({"prompt": "x"})
+        assert len(h) == 12 and question_id({"prompt": "x"}) == h  # stable
+        assert question_id({"prompt": "y"}) != h  # different prompt -> different id
+
+    def test_outcomes_off_by_default(self, tmp_path):
+        def fake_benchmark(dataset_path, model, task, **kw):
+            rows = [json.loads(line) for line in open(dataset_path)]
+            return {"generated_texts": ["Answer: 1"] * len(rows), "mean_tpot_ms": 10.0}
+
+        # default outcomes_out=None: no file, no error
+        evaluate_model(
+            [{"prompt": "q", "answer": 1, "cluster": 0}], model="m",
+            task=TASKS["teleqna"], runs=1, workdir=tmp_path / "splits",
+            benchmark=fake_benchmark,
+        )
 
     def test_missing_tpot_raises(self, tmp_path):
         def bad_benchmark(dataset_path, model, task, **kwargs):

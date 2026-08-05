@@ -19,7 +19,9 @@ so nothing else depends on vLLM being importable.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -27,16 +29,11 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Callable
 
+from cre_router.textutils import split_thinking
+
 # ---------------------------------------------------------------------------
 # Answer parsing
 # ---------------------------------------------------------------------------
-
-
-def split_thinking(text: str) -> str:
-    """Return the post-reasoning content, dropping a leading <think>...</think>
-    block when present."""
-    end = text.find("</think>")
-    return text[end + len("</think>") :].strip() if end != -1 else text.strip()
 
 
 def parse_aime_answer(text: str) -> int | None:
@@ -70,6 +67,49 @@ def parse_teleqna_answer(text: str) -> int | None:
     return int(numbers[-1]) if numbers else None
 
 
+# TeleMath gold answers are short numbers (at most 17 characters across the
+# 500-question dataset) and a well-formed completion states the answer at the
+# very end. Degenerate or truncated generations, however, can run to hundreds of
+# kilobytes; searching all of it made the number pattern below backtrack
+# quadratically and stall for hours. Restricting the search to a tail window
+# keeps every pattern linear in the window, and a real answer (a few characters,
+# at the end) is never clipped.
+_TELEMATH_TAIL_CHARS = 4000
+# One integer run with an optional fraction, or a leading-dot decimal, plus an
+# optional exponent. Unlike ``\d*\.?\d+`` this has no two adjacent
+# variable-length digit runs, so it cannot backtrack catastrophically.
+_TELEMATH_NUMBER = r"[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?"
+
+
+def parse_telemath_answer(text: str) -> float | None:
+    """Extract a TeleMath numerical answer (a float) from a completion.
+
+    TeleMath answers are numerical quantities, often long decimals or in
+    scientific notation (e.g. 233.333333333333, 7.2e-05, -62.0854). The final
+    value is taken from a ``\\boxed{}`` when present, then an explicit
+    ``Answer:``, then the last number in the text. LaTeX scientific notation
+    (``7.2 \\times 10^{-5}``) is normalised to ``7.2e-5`` before matching.
+    """
+    content = split_thinking(text)[-_TELEMATH_TAIL_CHARS:]
+    content = re.sub(
+        r"([-+]?(?:\d+(?:\.\d+)?|\.\d+))\s*\\times\s*10\^\{?(-?\d+)\}?",
+        r"\1e\2",
+        content,
+    )
+    for pattern in (
+        rf"\\boxed\{{\s*({_TELEMATH_NUMBER})\s*\}}",
+        rf"\*{{0,2}}Answer\*{{0,2}}\s*[:：]\s*({_TELEMATH_NUMBER})",
+        rf"({_TELEMATH_NUMBER})",
+    ):
+        matches = re.findall(pattern, content)
+        if matches:
+            try:
+                return float(matches[-1])
+            except ValueError:
+                continue
+    return None
+
+
 def answers_match(predicted: int | None, gold: Any) -> bool:
     if predicted is None:
         return False
@@ -77,6 +117,21 @@ def answers_match(predicted: int | None, gold: Any) -> bool:
         return int(predicted) == int(gold)
     except (TypeError, ValueError):
         return str(predicted).strip() == str(gold).strip()
+
+
+def numeric_match(predicted: float | None, gold: Any, rel_tol: float = 1e-2) -> bool:
+    """Correct if the predicted value is within a relative tolerance of the gold.
+
+    Uses ``math.isclose`` with a 1% relative tolerance, which accepts the same
+    quantity reported at different rounding (233.33 vs 233.333333) and rejects
+    genuinely different values; the small absolute floor covers near-zero golds.
+    """
+    if predicted is None:
+        return False
+    try:
+        return math.isclose(float(predicted), float(gold), rel_tol=rel_tol, abs_tol=1e-9)
+    except (TypeError, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +155,19 @@ class Task:
     top_k: int
     min_p: float
     max_tokens: int
+    # Gemma 4's thinking switch (`enable_thinking`) is a chat-template kwarg,
+    # not a text-level prefix like Qwen's /no_think, and vLLM's own bench-serve
+    # dataset loader never forwards template kwargs (confirmed by reading
+    # vllm/benchmarks/datasets.py CustomDataset.sample: it calls
+    # apply_chat_template with a fixed argument list). So for this family the
+    # dataset prep step renders the template itself and stores the finished
+    # text as the prompt; this flag tells the benchmark not to template it
+    # again on top.
+    pre_rendered: bool = False
+    # How a parsed answer is compared to the gold label. Defaults to exact
+    # integer/string equality (`answers_match`); numerical-answer tasks such as
+    # TeleMath set this to a tolerance-based comparison instead.
+    match: Callable[[Any, Any], bool] | None = None
 
 
 TASKS: dict[str, Task] = {
@@ -121,6 +189,46 @@ TASKS: dict[str, Task] = {
         min_p=0.0,
         max_tokens=1024,
     ),
+    # TeleMath: telecom mathematical problems with numerical (float) answers,
+    # scored by relative tolerance rather than exact match. Two arms, since the
+    # pool mixes thinking and non-thinking models and each has its own
+    # recommended sampling: `telemath` for thinking models, `telemath_nothink`
+    # for instruct models.
+    "telemath": Task(
+        name="telemath",
+        parse=parse_telemath_answer,
+        match=numeric_match,
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        min_p=0.0,
+        max_tokens=40960,
+    ),
+    "telemath_nothink": Task(
+        name="telemath_nothink",
+        parse=parse_telemath_answer,
+        match=numeric_match,
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        min_p=0.0,
+        max_tokens=16384,
+    ),
+    # Gemma 4 with thinking enabled. Same reasoning sampling as `telemath`, but
+    # the thinking switch is a chat-template kwarg baked into the prompt text by
+    # data/prep_gemma4_thinking.py, so the prompts are pre_rendered and served
+    # verbatim rather than templated again by the benchmark.
+    "telemath_gemma4": Task(
+        name="telemath_gemma4",
+        parse=parse_telemath_answer,
+        match=numeric_match,
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        min_p=0.0,
+        max_tokens=40960,
+        pre_rendered=True,
+    ),
 }
 
 
@@ -130,18 +238,23 @@ TASKS: dict[str, Task] = {
 
 
 def score_generations(
-    generated_texts: list[str], gold_answers: list[Any], parse: Callable[[str], int | None]
+    generated_texts: list[str],
+    gold_answers: list[Any],
+    parse: Callable[[str], Any],
+    match: Callable[[Any, Any], bool] | None = None,
 ) -> tuple[float, list[bool]]:
     """Return (error_rate, per-item correctness) for one benchmark run.
 
     ``generated_texts`` are assumed aligned with ``gold_answers`` (the vLLM
-    benchmark preserves dataset order with shuffling disabled).
+    benchmark preserves dataset order with shuffling disabled). ``match``
+    defaults to exact equality; numerical tasks pass a tolerance comparison.
     """
     if len(generated_texts) != len(gold_answers):
         raise ValueError(
             f"{len(generated_texts)} generations vs {len(gold_answers)} gold answers"
         )
-    correct = [answers_match(parse(t), g) for t, g in zip(generated_texts, gold_answers)]
+    matcher = match or answers_match
+    correct = [matcher(parse(t), g) for t, g in zip(generated_texts, gold_answers)]
     error = 1.0 - sum(correct) / len(correct) if correct else 1.0
     return error, correct
 
@@ -169,6 +282,7 @@ def cluster_sizes(dataset: list[dict]) -> dict[str, int]:
 # request throughput it is per-request, so it adds up correctly across cascade
 # rungs. All are optional so an injected benchmark may supply only TPOT.
 OPTIONAL_METRICS = (
+    "ttft_ms",
     "e2el_ms",
     "request_throughput",
     "mean_output_tokens",
@@ -185,6 +299,7 @@ class RunMeasurement:
     error: float
     tpot_ms: float
     num_prompts: int
+    ttft_ms: float | None = None
     e2el_ms: float | None = None
     request_throughput: float | None = None
     mean_output_tokens: float | None = None
@@ -211,6 +326,10 @@ def optional_metrics(
     mean_output = float(output_tokens) / num_prompts if output_tokens and num_prompts else None
     if mean_output is not None:
         metrics["mean_output_tokens"] = mean_output
+
+    ttft = result.get("mean_ttft_ms")
+    if ttft is not None:
+        metrics["ttft_ms"] = float(ttft)
 
     e2el = result.get("mean_e2el_ms")
     if e2el is None:
@@ -363,6 +482,19 @@ def run_vllm_benchmark(
     args.top_k = task.top_k
     args.min_p = task.min_p
     args.custom_output_len = task.max_tokens
+    # Prompts for a pre_rendered task already carry the fully-templated text
+    # (chat-template kwargs like Gemma 4's enable_thinking baked in), so the
+    # loader must serve them verbatim rather than templating a second time.
+    args.skip_chat_template = task.pre_rendered
+    if task.pre_rendered:
+        # vLLM's completions endpoint decodes with skip_special_tokens=True by
+        # default, which silently removes Gemma 4's <|channel> marker (a
+        # registered special token) from the returned text while leaving the
+        # ordinary word "thought" that follows it untouched -- confirmed by a
+        # direct A/B request against a live google/gemma-4-E2B-it server.
+        # Qwen's <think>/</think> are not special tokens and are
+        # unaffected either way, so this is only needed for pre_rendered tasks.
+        args.extra_body = {"skip_special_tokens": False}
     args.disable_shuffle = True
     args.no_oversample = True
     args.request_rate = float("inf")
@@ -382,6 +514,19 @@ def run_vllm_benchmark(
     return benchmark_main(args)
 
 
+def question_id(item: dict) -> str:
+    """A stable per-question key for joining outcomes across models/runs.
+
+    Uses the dataset's ``id`` when present (preserved through clustering and
+    Gemma pre-rendering), otherwise a hash of the raw prompt. It must identify
+    the same question identically across every model, so downstream analysis can
+    pair per-question correctness (confidence intervals, McNemar significance)."""
+    qid = item.get("id")
+    if qid is not None:
+        return str(qid)
+    return hashlib.md5(item["prompt"].encode("utf-8")).hexdigest()[:12]
+
+
 def evaluate_model(
     dataset: list[dict],
     model: str,
@@ -395,18 +540,33 @@ def evaluate_model(
     workdir: str | Path = "results/splits",
     download_dir: str | None = None,
     benchmark: Callable[..., dict] | None = None,
+    outcomes_out: str | Path | None = None,
+    generations_out: str | Path | None = None,
 ) -> list[RunMeasurement]:
     """Benchmark ``model`` on each cluster for ``runs`` repetitions.
 
     Each dataset row needs ``prompt``, ``answer``, and ``cluster``. Returns the
     per-(cluster, run) measurements; aggregate them with ``model_entry``.
     ``benchmark`` defaults to ``run_vllm_benchmark`` and is injected in tests.
+
+    When ``outcomes_out`` is given, writes one JSONL row per (question, run) with
+    ``qid``, ``cluster``, ``run``, ``correct`` and ``output_len``. This is the
+    per-question record needed for confidence intervals and paired significance
+    tests; it is irrecoverable once discarded, so capture it during the run.
+
+    When ``generations_out`` is given, writes one JSONL row per (question, run)
+    additionally carrying the model's ``full_output`` text and ``num_tokens``.
+    This is the training data for the Stage 2 accept/escalate QE classifier
+    (``question [SEP] full_output [SEP] num_tokens`` -> correct), and like the
+    generations themselves it is irrecoverable once the run ends.
     """
     run_benchmark = benchmark or run_vllm_benchmark
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
 
     measurements: list[RunMeasurement] = []
+    outcomes: list[dict] | None = [] if outcomes_out is not None else None
+    generations: list[dict] | None = [] if generations_out is not None else None
     for cluster, items in split_by_cluster(dataset).items():
         split_path = workdir / f"{task.name}_cluster_{cluster}.jsonl"
         with split_path.open("w") as f:
@@ -425,7 +585,43 @@ def evaluate_model(
                 seed=base_seed + run,
                 download_dir=download_dir,
             )
-            error, _ = score_generations(result["generated_texts"], gold, task.parse)
+            error, correct = score_generations(
+                result["generated_texts"], gold, task.parse, task.match
+            )
+            output_lens = result.get("output_lens") or [None] * len(items)
+            if outcomes is not None:
+                for item, ok, olen in zip(items, correct, output_lens):
+                    outcomes.append(
+                        {
+                            "qid": question_id(item),
+                            "cluster": cluster,
+                            "run": run,
+                            "correct": bool(ok),
+                            "output_len": olen,
+                        }
+                    )
+            if generations is not None:
+                texts = result["generated_texts"]
+                for item, ok, olen, text in zip(items, correct, output_lens, texts):
+                    generations.append(
+                        {
+                            "qid": question_id(item),
+                            "cluster": cluster,
+                            "run": run,
+                            # ``question`` is the raw query the QE classifier and
+                            # humans read; ``prompt`` is the exact served input
+                            # (chat-templated for pre_rendered tasks). They differ
+                            # only for pre_rendered models, where prep stores the
+                            # original question under ``question``.
+                            "question": item.get("question", item.get("prompt", "")),
+                            "prompt": item.get("prompt", ""),
+                            "ground_truth_answer": item["answer"],
+                            "answer": task.parse(text),
+                            "full_output": text,
+                            "num_tokens": olen,
+                            "correct": bool(ok),
+                        }
+                    )
             tpot_ms = result.get("mean_tpot_ms")
             if tpot_ms is None:
                 raise ValueError("benchmark result is missing 'mean_tpot_ms'")
@@ -439,4 +635,16 @@ def evaluate_model(
                     **optional_metrics(result, len(items), task.max_tokens),
                 )
             )
+    if outcomes is not None:
+        out_path = Path(outcomes_out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("w") as f:
+            for o in outcomes:
+                f.write(json.dumps(o) + "\n")
+    if generations is not None:
+        gen_path = Path(generations_out)
+        gen_path.parent.mkdir(parents=True, exist_ok=True)
+        with gen_path.open("w") as f:
+            for g in generations:
+                f.write(json.dumps(g, ensure_ascii=False) + "\n")
     return measurements
