@@ -233,13 +233,69 @@ def system_metrics(
     return acc, tpot
 
 
+def cascade_system_metrics_ntier(
+    models: list[ModelStats],
+    cascades: dict[str, list[tuple[str, int | float]]],
+    cluster_sizes: dict[str, int | float],
+) -> tuple[float, float]:
+    """System TPOT and E2EL for an N-tier cascade (>= 1 tier per cluster).
+
+    ``cascades`` maps each cluster to its escalation chain, ordered from the
+    Stage 1 (base) model up to the strongest tier:
+    ``[(model_0, reach_0), (model_1, reach_1), ...]``. ``reach_i`` is the number
+    of the cluster's queries that *execute* tier ``i`` -- ``reach_0`` equals the
+    cluster size (every query runs the base model), and the sequence is
+    non-increasing as the QE gate at each tier accepts some outputs and escalates
+    the rest. A single-element chain is a direct (un-gated) assignment. Two-tier
+    ``cascade_system_metrics`` is the special case ``[(eff, size), (strong, count)]``.
+
+    Both metrics are query-weighted, matching Stage 1 and vLLM's per-request Mean
+    TPOT. A query delivered at tier ``k`` has executed tiers ``0..k``:
+
+    - **E2EL** is the plain sum of every executed pass, so each query reaching
+      tier ``i`` pays ``E2EL_i`` in full: ``E2EL = sum_i reach_i * E2EL_i``.
+    - **TPOT** charges all executed passes to the delivered tokens ``L_k``:
+      ``(sum_{i<=k} TPOT_i * L_i) / L_k``, generalising the two-tier rule that
+      amortises the discarded efficient generation over the delivered answer.
+
+    Returns ``(tpot_ms, e2el_ms)``.
+    """
+    by_name = {m.name: m for m in models}
+    total = sum(cluster_sizes.values())
+    tpot_sum = 0.0
+    e2el_sum = 0.0
+    for cluster, chain in cascades.items():
+        if not chain:
+            raise ValueError(f"cluster {cluster!r} has an empty cascade chain")
+        size = cluster_sizes[cluster]
+        names = [t[0] for t in chain]
+        reach = [t[1] for t in chain]
+        if not math.isclose(reach[0], size):
+            raise ValueError(
+                f"cluster {cluster!r}: base tier reach {reach[0]} must equal cluster size {size}"
+            )
+        if any(reach[i + 1] > reach[i] for i in range(len(reach) - 1)):
+            raise ValueError(f"cluster {cluster!r}: tier reach must be non-increasing, got {reach}")
+        tpots = [by_name[n].tpot_for(cluster) for n in names]
+        e2els = [by_name[n].e2el_for(cluster) for n in names]
+        lengths = [by_name[n].output_tokens_for(cluster) for n in names]
+        cumulative_decode = 0.0
+        for k in range(len(names)):
+            e2el_sum += reach[k] * e2els[k]
+            cumulative_decode += tpots[k] * lengths[k]
+            reach_next = reach[k + 1] if k + 1 < len(names) else 0
+            delivered_k = reach[k] - reach_next
+            tpot_sum += delivered_k * (cumulative_decode / lengths[k])
+    return tpot_sum / total, e2el_sum / total
+
+
 def cascade_system_metrics(
     models: list[ModelStats],
     assignment: dict[str, str],
     cluster_sizes: dict[str, int | float],
     escalations: dict[str, tuple[str, float]],
 ) -> tuple[float, float]:
-    """System TPOT and E2EL for the full Stage 1+2 cascade.
+    """System TPOT and E2EL for a two-tier Stage 1+2 cascade.
 
     ``assignment`` is the Stage 1 cluster-to-model map. ``escalations`` maps a
     cluster to ``(strong_model, count)``: that many of the cluster's queries run
@@ -248,40 +304,72 @@ def cascade_system_metrics(
     route entirely to their Stage 1 model, so ``system_metrics`` is the special
     case with no escalations.
 
-    Both metrics are query-weighted, matching Stage 1 and vLLM's per-request Mean
-    TPOT. They differ only in how an escalated query is charged:
-
-    - **TPOT** charges both passes per delivered token,
-      ``TPOT_strong + TPOT_eff * (L_eff / L_strong)``: the discarded efficient
-      generation is amortised over the strong model's delivered answer.
-    - **E2EL** is a plain sum, ``E2EL_eff + E2EL_strong``: the user waits for the
-      efficient generation to complete, since Stage 2 inspects the whole output
-      before escalating, and then for the strong generation.
-
-    Returns ``(tpot_ms, e2el_ms)``. Reproduces the paper's Stage 1+2 latency,
+    A thin wrapper over :func:`cascade_system_metrics_ntier` that builds a
+    one- or two-tier chain per cluster. Reproduces the paper's Stage 1+2 latency,
     9.7 ms on AIME and 23.8 ms on TeleQnA.
     """
-    by_name = {m.name: m for m in models}
-    total = sum(cluster_sizes.values())
-    tpot_sum = 0.0
-    e2el_sum = 0.0
+    cascades: dict[str, list[tuple[str, int | float]]] = {}
     for cluster, name in assignment.items():
-        efficient = by_name[name]
         size = cluster_sizes[cluster]
         if cluster in escalations:
             strong_name, count = escalations[cluster]
-            strong = by_name[strong_name]
-            direct = size - count
-            ratio = efficient.output_tokens_for(cluster) / strong.output_tokens_for(cluster)
-            escalated_tpot = strong.tpot_for(cluster) + efficient.tpot_for(cluster) * ratio
-            tpot_sum += direct * efficient.tpot_for(cluster) + count * escalated_tpot
-            e2el_sum += direct * efficient.e2el_for(cluster) + count * (
-                efficient.e2el_for(cluster) + strong.e2el_for(cluster)
-            )
+            cascades[cluster] = [(name, size), (strong_name, count)]
         else:
-            tpot_sum += size * efficient.tpot_for(cluster)
-            e2el_sum += size * efficient.e2el_for(cluster)
-    return tpot_sum / total, e2el_sum / total
+            cascades[cluster] = [(name, size)]
+    return cascade_system_metrics_ntier(models, cascades, cluster_sizes)
+
+
+def cluster_cascade_accuracy(
+    weak_correct: list[bool],
+    strong_correct: list[bool],
+    escalate: list[bool],
+) -> float:
+    """Per-cluster accuracy of the Stage 2 cascade, composed per query.
+
+    For each query the QE classifier either accepts the efficient model's output
+    (keep ``weak_correct``) or escalates it to the strong model (take
+    ``strong_correct``). The three lists are aligned per query on the same
+    cluster. This is the exact composition the paper reports: a wrongly escalated
+    correct answer (false positive) still gets whatever the strong model returns,
+    and a wrongly accepted wrong answer (false negative) stays wrong.
+    """
+    n = len(weak_correct)
+    if not (len(strong_correct) == len(escalate) == n):
+        raise ValueError("weak_correct, strong_correct, escalate must align per query")
+    if n == 0:
+        raise ValueError("cannot compute cascade accuracy over an empty cluster")
+    correct = sum(
+        (s if esc else w) for w, s, esc in zip(weak_correct, strong_correct, escalate)
+    )
+    return correct / n
+
+
+def cascade_system_accuracy(
+    models: list[ModelStats],
+    assignment: dict[str, str],
+    cluster_sizes: dict[str, int | float],
+    cascade_accuracy: dict[str, float],
+) -> float:
+    """System accuracy for the full Stage 1+2 cascade, query-weighted.
+
+    A cluster listed in ``cascade_accuracy`` contributes that measured cascade
+    accuracy (efficient outputs gated by the QE classifier, rejects escalated to
+    the strong model -- see ``cluster_cascade_accuracy``). A cluster absent from
+    it routes entirely to its Stage 1 model and contributes ``1 - error`` for the
+    assigned model, so ``system_metrics``' accuracy is the no-escalation special
+    case. Reproduces the paper's Stage 1+2 accuracy, 88.4% on AIME and 74.3% on
+    TeleQnA.
+    """
+    by_name = {m.name: m for m in models}
+    total = sum(cluster_sizes.values())
+    acc = 0.0
+    for cluster, name in assignment.items():
+        size = cluster_sizes[cluster]
+        if cluster in cascade_accuracy:
+            acc += size * cascade_accuracy[cluster]
+        else:
+            acc += size * (1.0 - by_name[name].errors[cluster])
+    return acc / total
 
 
 def eta(

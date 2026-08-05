@@ -1,8 +1,9 @@
 {
-  "_comment": "AIME 2024 test set, Stage 1+2 cascade inputs. Per-cluster TPOT, E2EL and output length are measured on the test split (2xA100, vLLM, concurrency 32, 5-run mean). assignment is the lambda*=0.06 routing from `cre fit` on the training stats; escalations are the measured QE escalation counts (Table aime_qe_runs). `cre cascade` gives 9.75 ms TPOT and 156303 ms E2EL, matching the paper's Table aime_test (9.7 ms) to within rounding.",
+  "_comment": "AIME 2024 test set, Stage 1+2 cascade inputs. Per-cluster TPOT, E2EL and output length are measured on the test split (2xA100, vLLM, concurrency 32, 5-run mean). assignment is the lambda*=0.06 routing from `cre fit` on the training stats; escalations are the measured QE escalation counts (Table aime_qe_runs); cascade_accuracy is the measured per-cluster accuracy after the QE cascade on C1. `cre cascade` gives system accuracy 0.884, 9.75 ms TPOT and 156303 ms E2EL, matching the paper's Table aime_test (88.4%, 9.7 ms) to within rounding.",
   "cluster_sizes": {"0": 9, "1": 10, "2": 11},
   "assignment": {"0": "Qwen3-30B-A3B", "1": "VibeThinker-1.5B", "2": "Qwen3-30B-A3B"},
   "escalations": {"1": ["Qwen3-30B-A3B", 0.6]},
+  "cascade_accuracy": {"1": 0.96},
   "models": {
     "VibeThinker-1.5B": {
       "errors": {"0": 0.311, "1": 0.100, "2": 0.291},
