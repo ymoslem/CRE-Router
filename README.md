@@ -1,12 +1,14 @@
 # CRE-Router
 
+[![tests](https://github.com/ymoslem/CRE-Router/actions/workflows/tests.yml/badge.svg)](https://github.com/ymoslem/CRE-Router/actions/workflows/tests.yml)
+
 Implementation of the paper, [**Cluster, Route, Escalate: Cascaded Framework for Cost-Aware LLM Serving**](https://arxiv.org/abs/2606.27457).
 
 
 ## System overview
 
 Production deployment of large language models forces a trade-off between
-accuracy and cost. This framework routes each query to the most
+accuracy and cost. CRE-Router framework routes each query to the most
 cost-effective model in a pool, then escalates low-quality outputs to a
 stronger model:
 
@@ -24,13 +26,26 @@ stronger model:
 Both stages train only on task-correctness labels obtainable from standard
 benchmark evaluation; no extra annotation is required.
 
+### Choosing the cost metric
+
+Stage 1 scores each model with `Error(m, c) + lambda * Cost_norm(m)`. `Cost` is
+either time per output token (`--cost-metric tpot`, the default, which reproduces
+the published results) or end-to-end request latency (`--cost-metric e2el`).
+
+The two agree while pool members emit similar numbers of tokens, and diverge as
+soon as they do not. A reasoning model and a non-reasoning one can differ by less
+than a millisecond in TPOT while differing several-fold in E2EL, because
+`E2EL = TTFT + TPOT * L` and TPOT divides the output length `L` out. Use E2EL
+whenever the pool mixes thinking and non-thinking members, or verbose and terse
+ones.
+
 <p align="center"><img src="img/system.svg" alt="Two-stage cascaded routing system" width="640"></p>
 
 ## Pipeline
 
 The full workflow is driven by the `cre` CLI, one stage per step:
 
-`cre cluster` → `cre evaluate` → `cre fit` → `cre qe-train` → `cre serve`
+`cre cluster` → `cre evaluate` → `cre fit` → `cre qe-train` → `cre qe-cascade` → `cre serve`
 
 Serving (`cre serve`) switches between the live vLLM backends through [LiteLLM](https://github.com/BerriAI/litellm).
 
@@ -40,11 +55,13 @@ Serving (`cre serve`) switches between the live vLLM backends through [LiteLLM](
 | `cre evaluate` | Runs each model per cluster through vLLM's benchmark, scores answers, averages per-cluster error and TPOT. This is the slowest stage; cost scales with model size, output length, and `--runs`, and it runs once per model. | dataset JSONL, a running vLLM server, fitted centroids | per-model entry in the stats JSON; raw runs under `results/` | `--runs`, `--port`, `--concurrency` |
 | `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^*$ under the TPOT budget | stats JSON, budget B | routing table and $\lambda^*$ in `router.json` | `--budget` (required), `--output` |
 | `cre qe-train` | Fine-tunes ModernBERT-base as the accept/escalate QE classifier | HF dataset of model outputs with correctness labels | QE classifier checkpoint | `--learning-rate`, `--max-length`, `--attn-implementation` |
+| `cre qe-cascade` | Replays the trained QE over an efficient model's saved generations, composing per-cluster cascade accuracy and escalation counts | generations JSONL, the strong model's outcomes, a QE checkpoint | cascade config for `cre cascade` | `--clusters`, `--accept-threshold` |
+| `cre cascade` | Composes Stage 1+2 system accuracy and latency, under TPOT and E2EL, from measured stats | cascade config | system accuracy, TPOT, E2EL | `--stats` |
 | `cre serve` | Runs the live router: sends each incoming query to its cluster's assigned model, and escalates weak answers to a stronger model | serving config, running backends | live HTTP router on port 4000 | `--config`, `--port` |
 
 Full flags for any stage: `cre <stage> --help`.
 
-## Install
+## Installation
 
 ```bash
 pip install "cre-router[full]"
