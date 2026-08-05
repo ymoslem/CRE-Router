@@ -404,7 +404,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--strong-model", required=True, help="strong model name recorded in the escalations")
     p.add_argument("--clusters", default=None, help="comma-separated clusters to cascade (default: all present)")
     p.add_argument("--out", default=None, help="cascade stats JSON to update in place with the Stage 2 fields")
-    p.add_argument("--base-tokenizer", default="answerdotai/ModernBERT-base")
+    p.add_argument("--base-tokenizer", default=None,
+                   help="defaults to the checkpoint itself, which ships its own tokenizer; "
+                        "give a base model id only for a checkpoint saved without one")
     p.add_argument("--max-length", type=int, default=4096, help="4096 for long reasoning, 512 for short MCQ")
     p.add_argument("--accept-threshold", type=float, default=0.5)
     p.add_argument("--batch-size", type=int, default=32)

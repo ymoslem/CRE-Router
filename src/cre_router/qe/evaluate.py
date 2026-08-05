@@ -88,7 +88,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--classifier", required=True, help="trained QE checkpoint")
     parser.add_argument("--dataset", required=True, help="HF dataset of model outputs")
     parser.add_argument("--split", required=True, help="dataset split to evaluate")
-    parser.add_argument("--base-tokenizer", default="answerdotai/ModernBERT-base")
+    parser.add_argument("--base-tokenizer", default=None,
+                        help="defaults to the checkpoint itself, which ships its own tokenizer; "
+                             "give a base model id only for a checkpoint saved without one")
     parser.add_argument("--max-length", type=int, default=4096, help="4096 AIME, 512 TeleQnA")
     parser.add_argument("--accept-threshold", type=float, default=0.5)
     parser.add_argument("--batch-size", type=int, default=32)
