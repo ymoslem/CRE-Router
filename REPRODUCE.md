@@ -135,6 +135,29 @@ cre qe-eval --classifier <checkpoint> --dataset ymoslem/AIME-clustered-output \
 (true / unnecessary / missed escalations) used in the QE appendices. For
 TeleQnA use `--max-length 512` and learning rate 2e-5.
 
+### Building QE data for a new pool
+
+For a pool other than the released ones, the QE data comes from the efficient
+model's own generations:
+
+```bash
+# capture generations alongside the per-question outcomes
+cre evaluate ... --save-generations
+
+# convert them to the schema cre qe-train reads
+python data/prep_qe.py --train <train_generations.jsonl> \
+    --test <test_generations.jsonl> --out qe-data/<name>
+
+# replay a trained classifier over the gated clusters
+cre qe-cascade --classifier <checkpoint> --generations <test_generations.jsonl> \
+    --clusters 1,3 --strong-outcomes <strong_outcomes.jsonl> \
+    --strong-model <name> --out configs/<pool>_cascade_test.json
+```
+
+`--save-generations` adds the full outputs the classifier judges; per-question
+outcomes are always written. `cre qe-cascade` writes the per-cluster cascade
+accuracy and escalation counts into the cascade config that `cre cascade` reads.
+
 ## Serving the paper's pools
 
 Two ready-made serving configs are provided:
