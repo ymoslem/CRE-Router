@@ -31,6 +31,17 @@ from typing import Any, Callable
 
 from cre_router.textutils import split_thinking
 
+# Identifies the grading rules that produced a result file. Bump this whenever a
+# parser or a match rule changes what counts as correct, so saved artifacts
+# declare their own provenance and a reader never has to infer it from a
+# timestamp. Stamped into stats files and generation rows.
+#
+#   1  original rules
+#   2  2026-08-13: TeleMath parser fix (fractions, units and comma separators
+#      inside \boxed{}, double-boxed answers, exponent leakage) and
+#      numeric_match abs_tol 1e-9 -> 0
+SCORER_VERSION = 2
+
 # ---------------------------------------------------------------------------
 # Answer parsing
 # ---------------------------------------------------------------------------
@@ -79,35 +90,101 @@ _TELEMATH_TAIL_CHARS = 4000
 # optional exponent. Unlike ``\d*\.?\d+`` this has no two adjacent
 # variable-length digit runs, so it cannot backtrack catastrophically.
 _TELEMATH_NUMBER = r"[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?"
+# A LaTeX fraction (``\frac{7}{6}`` or ``\dfrac``/``\tfrac``), a bare ``a/b``,
+# or a plain number, in that priority. Each numerator/denominator/number is
+# the bounded ``_TELEMATH_NUMBER`` above, so this has the same no-backtracking
+# guarantee.
+_TELEMATH_VALUE = (
+    rf"(?:(?P<fsign>[-+])?\\[dt]?frac\{{\s*(?P<fn>{_TELEMATH_NUMBER})\s*\}}\{{\s*(?P<fd>{_TELEMATH_NUMBER})\s*\}}"
+    rf"|(?P<rn>{_TELEMATH_NUMBER})\s*/\s*(?P<rd>{_TELEMATH_NUMBER})"
+    rf"|(?P<num>{_TELEMATH_NUMBER}))"
+)
+_TELEMATH_BOXED = re.compile(r"\\boxed\{((?:[^{}]|\{[^{}]*\})*)\}")
+# A value is only trusted with trailing content after it (e.g. a unit) when
+# that content is a harmless label rather than more math -- otherwise
+# ``\boxed{2e^{-2}}`` (meaning 2 times e to the minus 2) would truncate to 2.
+_TELEMATH_SAFE_TRAILER = re.compile(r"^\s*(\\text\{|$)")
+# A superscript exponent, braced or bare. Bounded repetition keeps this linear.
+_TELEMATH_SUPERSCRIPT = re.compile(r"\^\s*\{[^{}]{0,20}\}|\^\s*-?\d+(?:\.\d+)?")
+
+
+def _telemath_value(match: re.Match) -> float | None:
+    if match.group("fn") is not None:
+        num, den = float(match.group("fn")), float(match.group("fd"))
+        if match.group("fsign") == "-":
+            num = -num
+    elif match.group("rn") is not None:
+        num, den = float(match.group("rn")), float(match.group("rd"))
+    else:
+        return float(match.group("num"))
+    return num / den if den != 0 else None
+
+
+def _telemath_value_at_start(s: str) -> float | None:
+    """A fraction or number from the start of ``s``, ignoring a trailing
+    unit label, or None if nothing trustworthy is at the start."""
+    s = s.lstrip()
+    match = re.match(_TELEMATH_VALUE, s)
+    if match and _TELEMATH_SAFE_TRAILER.match(s[match.end():]):
+        try:
+            return _telemath_value(match)
+        except (ValueError, ZeroDivisionError):
+            return None
+    return None
 
 
 def parse_telemath_answer(text: str) -> float | None:
     """Extract a TeleMath numerical answer (a float) from a completion.
 
-    TeleMath answers are numerical quantities, often long decimals or in
-    scientific notation (e.g. 233.333333333333, 7.2e-05, -62.0854). The final
-    value is taken from a ``\\boxed{}`` when present, then an explicit
-    ``Answer:``, then the last number in the text. LaTeX scientific notation
-    (``7.2 \\times 10^{-5}``) is normalised to ``7.2e-5`` before matching.
+    TeleMath answers are numerical quantities, often long decimals, LaTeX
+    fractions, or scientific notation (e.g. 233.333333333333, 7.2e-05,
+    \\frac{7}{6}, -62.0854). The final value is taken from a ``\\boxed{}``
+    when present, then an explicit ``Answer:``, then the last value anywhere
+    in the text. LaTeX scientific notation (``7.2 \\times 10^{-5}``) and
+    comma thousands separators (``1,382,400``) are normalised before
+    matching. A fraction inside ``\\boxed{}``/``Answer:`` is evaluated
+    (``\\frac{7}{6}`` -> 1.1667); a bare unit label after the value is
+    ignored (``\\boxed{0.2 \\text{ packets/s}}`` -> 0.2), but anything else
+    trailing it is treated as more math and the match is rejected rather than
+    silently truncated (``\\boxed{2e^{-2}}`` is not truncated to 2).
     """
     content = split_thinking(text)[-_TELEMATH_TAIL_CHARS:]
+    content = re.sub(r"\d{1,3}(?:,\d{3})+", lambda m: m.group(0).replace(",", ""), content)
     content = re.sub(
         r"([-+]?(?:\d+(?:\.\d+)?|\.\d+))\s*\\times\s*10\^\{?(-?\d+)\}?",
         r"\1e\2",
         content,
     )
-    for pattern in (
-        rf"\\boxed\{{\s*({_TELEMATH_NUMBER})\s*\}}",
-        rf"\*{{0,2}}Answer\*{{0,2}}\s*[:：]\s*({_TELEMATH_NUMBER})",
-        rf"({_TELEMATH_NUMBER})",
-    ):
-        matches = re.findall(pattern, content)
-        if matches:
-            try:
-                return float(matches[-1])
-            except ValueError:
-                continue
-    return None
+
+    # A model sometimes boxes the same answer twice, a clean decimal first and
+    # a symbolic restatement last (``\boxed{1.732}`` ... ``\boxed{\sqrt{3}}``).
+    # Scan boxed occurrences from last to first so an unparseable final box
+    # falls back to an earlier clean one, rather than to the noisier tiers
+    # below.
+    for candidate in reversed(_TELEMATH_BOXED.findall(content)):
+        value = _telemath_value_at_start(candidate)
+        if value is not None:
+            return value
+
+    labelled = re.findall(rf"\*{{0,2}}Answer\*{{0,2}}\s*[:：]\s*(.{{0,80}})", content)
+    if labelled:
+        value = _telemath_value_at_start(labelled[-1])
+        if value is not None:
+            return value
+
+    # Last resort: the last value anywhere. Blank out superscript exponents
+    # first, or ``2e^{-2}`` and ``10^{-0.3}`` contribute their exponent as a
+    # standalone candidate and the scan ends on it.
+    content = _TELEMATH_SUPERSCRIPT.sub(" ", content)
+    last = None
+    for match in re.finditer(_TELEMATH_VALUE, content):
+        try:
+            value = _telemath_value(match)
+        except (ValueError, ZeroDivisionError):
+            continue
+        if value is not None:
+            last = value
+    return last
 
 
 def answers_match(predicted: int | None, gold: Any) -> bool:
@@ -124,12 +201,21 @@ def numeric_match(predicted: float | None, gold: Any, rel_tol: float = 1e-2) -> 
 
     Uses ``math.isclose`` with a 1% relative tolerance, which accepts the same
     quantity reported at different rounding (233.33 vs 233.333333) and rejects
-    genuinely different values; the small absolute floor covers near-zero golds.
+    genuinely different values. TeleMath publishes no tolerance of its own, so
+    1% is our stated choice; it sits inside the range over which model ranking
+    and cascade break-even are both invariant (see
+    ``ref/results/telemath/tolerance_decision.md``).
+
+    The comparison is purely relative. An absolute floor cannot be used here
+    because some gold answers are themselves smaller than any plausible floor
+    (down to 1e-10), so a floor would accept zero as correct for them. A gold
+    of exactly zero still matches a predicted zero, since ``math.isclose``
+    compares equal values as close at any tolerance.
     """
     if predicted is None:
         return False
     try:
-        return math.isclose(float(predicted), float(gold), rel_tol=rel_tol, abs_tol=1e-9)
+        return math.isclose(float(predicted), float(gold), rel_tol=rel_tol, abs_tol=0.0)
     except (TypeError, ValueError):
         return False
 
@@ -399,13 +485,20 @@ def merge_model_into_stats(
     stats_path: str | Path, model_name: str, entry: dict, sizes: dict[str, int]
 ) -> None:
     """Add or update one model's entry in a stats JSON, preserving other
-    models. Cluster sizes are (re)written from the evaluated dataset."""
+    models. Cluster sizes are (re)written from the evaluated dataset.
+
+    The file records ``scorer_version``, so a reader can tell which grader
+    produced its per-cluster error rates instead of guessing from the file's
+    timestamp. A file without the key predates the stamp and should be treated
+    as ungraded by the current rules.
+    """
     path = Path(stats_path)
     stats = json.loads(path.read_text()) if path.exists() else {}
     stats.setdefault("cluster_sizes", {})
     stats.setdefault("models", {})
     stats["cluster_sizes"] = {str(k): int(v) for k, v in sorted(sizes.items())}
     stats["models"][model_name] = entry
+    stats["scorer_version"] = SCORER_VERSION
     path.write_text(json.dumps(stats, indent=2) + "\n")
 
 
@@ -527,6 +620,51 @@ def question_id(item: dict) -> str:
     return hashlib.md5(item["prompt"].encode("utf-8")).hexdigest()[:12]
 
 
+# Chat-template control tokens, across the families we serve. A pre_rendered
+# prompt has been through the tokenizer's template and carries at least one.
+_TEMPLATE_MARKER = re.compile(
+    r"<\|[^|>]{1,40}\|?>?"      # Gemma 4 <|turn>, GPT-style <|im_start|>
+    r"|<bos>|<s>"               # SentencePiece BOS
+    r"|<start_of_turn>"         # earlier Gemma
+    r"|\[INST\]"                # Llama 2 / Mistral
+    r"|<｜[^｜]{1,40}｜>"  # DeepSeek full-width bars
+)
+
+
+def check_pre_rendered(dataset: list[dict], task: Task, sample: int = 32) -> None:
+    """Fail fast when a pre_rendered task is handed un-templated prompts.
+
+    A pre_rendered task serves ``prompt`` verbatim, with the chat template
+    already baked in by ``data/prep_gemma4_thinking.py``. Passing the raw
+    dataset instead is not an error the server reports: it answers happily, but
+    the model never receives the tokens that open and close its thinking
+    section, so it never emits the matching stop token and generates until it
+    hits ``max_tokens``. A run that hit this burned three and a half GPU-hours
+    and returned 52% truncated output at 0.5% accuracy, which is only
+    recognisable after the fact.
+
+    Only ``telemath_gemma4`` is pre_rendered today, so in practice this guards
+    the Gemma thinking runs, but it keys off the task flag rather than the model
+    name so any future pre-rendered task is covered too.
+    """
+    if not task.pre_rendered:
+        return
+    prompts = [row.get("prompt", "") for row in dataset[:sample]]
+    if not prompts:
+        return
+    bad = sum(1 for p in prompts if not _TEMPLATE_MARKER.search(p))
+    if bad:
+        raise ValueError(
+            f"task {task.name!r} is pre_rendered, but {bad} of {len(prompts)} sampled "
+            f"prompts carry no chat-template markers. The raw dataset was almost "
+            f"certainly passed instead of the pre-rendered one; serving it would "
+            f"generate to max_tokens without terminating. Use the output of "
+            f"data/prep_gemma4_thinking.py, e.g. "
+            f"telemath_train_gemma_<model>_think.jsonl.\n"
+            f"  first offending prompt: {next(p for p in prompts if not _TEMPLATE_MARKER.search(p))[:120]!r}"
+        )
+
+
 def evaluate_model(
     dataset: list[dict],
     model: str,
@@ -561,6 +699,7 @@ def evaluate_model(
     generations themselves it is irrecoverable once the run ends.
     """
     run_benchmark = benchmark or run_vllm_benchmark
+    check_pre_rendered(dataset, task)
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -598,6 +737,11 @@ def evaluate_model(
                             "run": run,
                             "correct": bool(ok),
                             "output_len": olen,
+                            # An outcomes file keeps no generated text, so its
+                            # verdicts can never be rechecked on their own. The
+                            # stamp is the only way a reader can tell whether
+                            # they were graded by the current rules.
+                            "scorer_version": SCORER_VERSION,
                         }
                     )
             if generations is not None:
@@ -620,6 +764,7 @@ def evaluate_model(
                             "full_output": text,
                             "num_tokens": olen,
                             "correct": bool(ok),
+                            "scorer_version": SCORER_VERSION,
                         }
                     )
             tpot_ms = result.get("mean_tpot_ms")

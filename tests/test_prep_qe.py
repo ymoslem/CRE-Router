@@ -23,9 +23,17 @@ def _gen(qid, cluster, correct, out="the answer is 4", ntok=12):
 
 class TestQeRow:
     def test_correct_maps_to_accept(self):
-        row = prep_qe.qe_row(_gen("a", 0, True))
+        # No task, so the stored verdict is copied and the caller is warned.
+        with pytest.warns(RuntimeWarning, match="copying the stored"):
+            row = prep_qe.qe_row(_gen("a", 0, True))
         assert row["decision_label"] == 1 and row["decision_str"] == "accept"
         assert row["score"] == 1.0 and row["accuracy"] == 1.0
+
+    def test_stale_scorer_version_is_refused(self):
+        """A log naming an older scorer must not become a training label."""
+        gen = _gen("a", 0, True) | {"scorer_version": 1}
+        with pytest.raises(ValueError, match="scorer_version"):
+            prep_qe.qe_row(gen)
 
     def test_wrong_maps_to_route(self):
         row = prep_qe.qe_row(_gen("b", 1, False))

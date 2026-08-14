@@ -6,6 +6,7 @@ import json
 import pytest
 
 from cre_router.evaluate import (
+    SCORER_VERSION,
     TASKS,
     RunMeasurement,
     aggregate_runs,
@@ -196,8 +197,13 @@ class TestEvaluateModelWithFakeBenchmark:
         recs = [json.loads(line) for line in open(out)]
         assert len(recs) == 3 * 2  # questions x runs
         for r in recs:
-            assert set(r) == {"qid", "cluster", "run", "correct", "output_len"}
+            assert set(r) == {
+                "qid", "cluster", "run", "correct", "output_len", "scorer_version",
+            }
             assert r["output_len"] == 5
+            # An outcomes row keeps no text, so the stamp is the only record of
+            # which grading rules produced its verdict.
+            assert r["scorer_version"] == SCORER_VERSION
         by_qid: dict = {}
         for r in recs:
             by_qid.setdefault(r["qid"], []).append(r["correct"])
@@ -232,9 +238,10 @@ class TestEvaluateModelWithFakeBenchmark:
         for r in recs:
             assert set(r) == {
                 "qid", "cluster", "run", "question", "prompt", "ground_truth_answer",
-                "answer", "full_output", "num_tokens", "correct",
+                "answer", "full_output", "num_tokens", "correct", "scorer_version",
             }
             assert r["num_tokens"] == 7
+            assert r["scorer_version"] == SCORER_VERSION
         by_qid = {r["qid"]: r for r in recs}
         # no explicit question field -> falls back to the (raw) prompt
         assert by_qid["a"]["question"] == "q0" and by_qid["a"]["prompt"] == "q0"

@@ -21,18 +21,59 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import warnings
 
 
-def qe_row(gen: dict) -> dict:
-    """One generation row -> one QE example (columns match ymoslem/*-router)."""
-    correct = bool(gen["correct"])
+from cre_router.evaluate import SCORER_VERSION
+
+_WARNED: list[int] = []
+
+
+def qe_row(gen: dict, task: str | None = None) -> dict:
+    """One generation row -> one QE example (columns match ymoslem/*-router).
+
+    ``task`` names an entry in ``cre_router.evaluate.TASKS``. When given, the
+    label and the extracted answer are recomputed from ``full_output`` with the
+    current grader instead of being copied from the generation log. Pass it
+    whenever the log predates a grader change, so a stale verdict cannot become
+    a training label. Without it the stored fields are used unchanged.
+    """
     full_output = gen["full_output"]
+    answer = gen.get("answer")
+    if task is not None:
+        from cre_router.evaluate import TASKS
+
+        spec = TASKS[task]
+        answer = spec.parse(full_output)
+        match = spec.match or (lambda p, g: p is not None and p == g)
+        correct = bool(match(answer, gen.get("ground_truth_answer")))
+    else:
+        # No task given, so the stored verdict is copied through. This is the
+        # hole that produced the first TeleMath QE classifiers: they were built
+        # from logs graded before the 2026-08-13 fixes, so every training label
+        # was the old grader's. Copying is still allowed, because AIME and
+        # TeleQnA logs are unaffected and re-parsing them needs no task, but it
+        # is never silent: a log that names a scorer older than the current one
+        # is refused outright.
+        stored_version = gen.get("scorer_version")
+        if stored_version is not None and stored_version < SCORER_VERSION:
+            raise ValueError(
+                f"generation was graded by scorer_version {stored_version}, current "
+                f"is {SCORER_VERSION}. Pass task=... so the label is recomputed from "
+                f"full_output; copying it would train on a stale verdict."
+            )
+        if not _WARNED:
+            _WARNED.append(1)
+            warnings.warn(
+                "qe_row(task=None): copying the stored `correct` field. Pass task= "
+                "to regrade from full_output.", RuntimeWarning, stacklevel=2)
+        correct = bool(gen["correct"])
     return {
         "question": gen.get("question", gen.get("prompt", "")),
         "prompt": gen.get("prompt", ""),
         "ground_truth_answer": gen.get("ground_truth_answer"),
         "full_output": full_output,
-        "answer": gen.get("answer"),
+        "answer": answer,
         "accuracy": float(correct),
         "num_words": len(full_output.split()),
         "num_tokens": gen["num_tokens"],
@@ -45,9 +86,9 @@ def qe_row(gen: dict) -> dict:
     }
 
 
-def to_qe_rows(generations: list[dict]) -> list[dict]:
+def to_qe_rows(generations: list[dict], task: str | None = None) -> list[dict]:
     """Convert generation rows to QE examples, pooling multiple files/models."""
-    return [qe_row(g) for g in generations]
+    return [qe_row(g, task=task) for g in generations]
 
 
 def _read_jsonl(path: Path) -> list[dict]:
