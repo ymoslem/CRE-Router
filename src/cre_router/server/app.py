@@ -25,6 +25,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from cre_router import __version__
 
 DECISION_LOG_MAXSIZE = 10_000
 
@@ -129,7 +130,7 @@ def build_app(router, decision_log: str | Path | None = None):
                 await log_queue.put(None)  # stop the writer and flush
                 await writer
 
-    app = FastAPI(title="cre-router", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="cre-router", version=__version__, lifespan=lifespan)
 
     @app.get("/health")
     async def health():

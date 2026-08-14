@@ -1,6 +1,6 @@
 """Cluster, Route, Escalate: cascaded framework for cost-aware LLM serving."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from cre_router.routing import (  # noqa: F401
     ModelStats,

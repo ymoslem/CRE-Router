@@ -4,9 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cre-router"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Cluster, Route, Escalate: a cascaded framework for cost-aware LLM serving"
-readme = "README.md"
+readme = "README-pypi.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -59,6 +59,9 @@ cre = "cre_router.cli:main"
 Homepage = "https://github.com/ymoslem/CRE-Router"
 Repository = "https://github.com/ymoslem/CRE-Router"
 Issues = "https://github.com/ymoslem/CRE-Router/issues"
+
+[tool.hatch.version]
+path = "src/cre_router/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cre_router"]
