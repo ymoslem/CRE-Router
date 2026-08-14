@@ -9,7 +9,7 @@ outputs to a stronger model:
 - **Stage 1 (clustering-based routing).** Queries are embedded and clustered
   offline; each cluster is routed to the model that minimizes a cost-adjusted
   error score (Error + lambda * Cost), with lambda tuned once to satisfy a
-  latency (TPOT) budget.
+  latency (TPOT or E2EL) budget.
 - **Stage 2 (quality-estimation cascade).** A lightweight ModernBERT
   classifier inspects each efficient-model output and escalates low-quality
   answers up an ordered ladder of stronger models.

@@ -15,7 +15,7 @@ stronger model:
 - **Stage 1 (clustering-based routing).** Queries are embedded and
   clustered offline; each cluster is assigned to the model minimizing
   `Error(m, c) + lambda * Cost_norm(m)`, where `lambda` ($\lambda$, the cost weight) is
-  tuned once to `lambda*` ($\lambda^*$) to satisfy a Time Per Output Token (TPOT) budget.
+  tuned once to `lambda*` ($\lambda^*$) to satisfy a latency budget (TPOT or E2EL).
 - **Stage 2 (quality-estimation cascade).** A lightweight classifier
   inspects each efficient-model output and escalates low-quality answers to
   a stronger model. With more than two models, escalation follows an ordered
