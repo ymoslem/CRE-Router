@@ -287,3 +287,63 @@ class TestEscalationOrderDerivation:
 
         with pytest.raises(ValueError, match="no stats"):
             _escalation_order({"models": {"V": {}}, "qe": {"enabled": True}}, RouterArtifacts())
+
+
+class TestEscalationOrderFollowsFittedCostMetric:
+    """A table fitted under E2EL must be served with an E2EL-ordered ladder.
+
+    Thinking and non-thinking modes of one model decode at nearly the same speed
+    but differ several-fold per request, so TPOT and E2EL disagree about which
+    models survive pruning and in what order. Deriving the ladder under the wrong
+    metric can therefore escalate into a model that is both costlier than the top
+    rung and less accurate than it.
+    """
+
+    STATS = {
+        "cluster_sizes": {"0": 10},
+        "models": {
+            "small-nothink": {"tpot_ms": 12.0, "e2el_ms": 6_000, "errors": {"0": 0.60}},
+            "small-think": {"tpot_ms": 13.0, "e2el_ms": 70_000, "errors": {"0": 0.40}},
+            "big-nothink": {"tpot_ms": 30.0, "e2el_ms": 20_000, "errors": {"0": 0.30}},
+        },
+    }
+    CONFIG = {
+        "models": {"small-nothink": {}, "small-think": {}, "big-nothink": {}},
+        "qe": {"enabled": True},
+    }
+
+    def _artifacts(self, cost_metric):
+        from cre_router.artifacts import RouterArtifacts
+
+        return RouterArtifacts(stats=self.STATS, cost_metric=cost_metric)
+
+    def test_e2el_fit_prunes_the_verbose_model_and_orders_by_e2el(self):
+        from cre_router.server.cascade_router import _escalation_order
+
+        # Under E2EL, small-think costs more than big-nothink while being less
+        # accurate, so it is dominated and must not appear as a rung at all.
+        assert _escalation_order(self.CONFIG, self._artifacts("e2el")) == [
+            "small-nothink",
+            "big-nothink",
+        ]
+
+    def test_tpot_fit_keeps_it(self):
+        from cre_router.server.cascade_router import _escalation_order
+
+        assert _escalation_order(self.CONFIG, self._artifacts("tpot")) == [
+            "small-nothink",
+            "small-think",
+            "big-nothink",
+        ]
+
+    def test_artifacts_without_a_recorded_metric_default_to_tpot(self):
+        """router.json written before the metric was recorded must still load."""
+        from cre_router.artifacts import RouterArtifacts
+
+        assert RouterArtifacts().cost_metric == "tpot"
+
+    def test_fitted_metric_survives_a_save_load_round_trip(self, tmp_path):
+        from cre_router.artifacts import RouterArtifacts
+
+        RouterArtifacts(stats=self.STATS, cost_metric="e2el").save(tmp_path)
+        assert RouterArtifacts.load(tmp_path).cost_metric == "e2el"

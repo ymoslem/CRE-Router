@@ -14,5 +14,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -e . pytest
+      - run: pip install -e . pytest check-manifest
       - run: pytest -q
+      # The sdist must contain exactly the tracked tree, no more and no less.
+      - run: check-manifest

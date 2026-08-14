@@ -63,5 +63,28 @@ Issues = "https://github.com/ymoslem/CRE-Router/issues"
 [tool.hatch.version]
 path = "src/cre_router/__init__.py"
 
+# Hatchling's default sdist ships every file the VCS does not ignore, so an
+# untracked working file would be published. This list mirrors the tracked tree
+# instead; `check-manifest` verifies the two still agree on every push.
+[tool.hatch.build.targets.sdist]
+include = [
+  ".github/workflows",
+  ".gitignore",
+  "configs",
+  "data/download.py",
+  "data/prep_gemma4_thinking.py",
+  "data/prep_qe.py",
+  "data/prep_telemath.py",
+  "img",
+  "src/cre_router",
+  "tests/test_*.py",
+  "DEVELOP.md",
+  "LICENSE",
+  "README.md",
+  "README-pypi.md",
+  "REPRODUCE.md",
+  "requirements-paper.txt",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/cre_router"]

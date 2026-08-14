@@ -132,6 +132,7 @@ def cmd_fit(args: argparse.Namespace) -> None:
         artifacts.routing_table = selection.region.assignment
         artifacts.lambda_star = selection.lambda_star
         artifacts.budget_ms = args.budget
+        artifacts.cost_metric = args.cost_metric
         artifacts.stats = stats
         artifacts.save(out_dir)
         print(f"Saved routing table to {out_dir}/router.json")

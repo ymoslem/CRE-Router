@@ -53,7 +53,7 @@ Serving (`cre serve`) switches between the live vLLM backends through [LiteLLM](
 |---|---|---|---|---|
 | `cre cluster` | Embeds training queries and fits k-means centroids (k chosen by Silhouette) | JSONL of training queries | `centroids.npy` and `router.json`; `train_assignments.jsonl` | `--k`, `--embedding-model` |
 | `cre evaluate` | Runs each model per cluster through vLLM's benchmark, scores answers, averages per-cluster error and TPOT. This is the slowest stage; cost scales with model size, output length, and `--runs`, and it runs once per model. | dataset JSONL, a running vLLM server, fitted centroids | per-model entry in the stats JSON; raw runs under `results/` | `--runs`, `--port`, `--concurrency` |
-| `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^*$ under the TPOT budget | stats JSON, budget B | routing table and $\lambda^*$ in `router.json` | `--budget` (required), `--output` |
+| `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^*$ under the cost budget | stats JSON, budget B | routing table and $\lambda^*$ in `router.json` | `--budget` (required), `--cost-metric`, `--output` |
 | `cre qe-train` | Fine-tunes ModernBERT-base as the accept/escalate QE classifier | HF dataset of model outputs with correctness labels | QE classifier checkpoint | `--learning-rate`, `--max-length`, `--attn-implementation` |
 | `cre qe-cascade` | Replays the trained QE over an efficient model's saved generations, composing per-cluster cascade accuracy and escalation counts | generations JSONL, the strong model's outcomes, a QE checkpoint | cascade config for `cre cascade` | `--clusters`, `--accept-threshold` |
 | `cre cascade` | Composes Stage 1+2 system accuracy and latency, under TPOT and E2EL, from measured stats | cascade config | system accuracy, TPOT, E2EL | `--stats` |
@@ -187,10 +187,12 @@ routing, Pareto pruning, and the escalation ladder adapt to whatever pool you
 measure. The paper's pools are Qwen 3 / Qwen 3.5, Gemma 4, and VibeThinker
 (see [REPRODUCE.md](REPRODUCE.md)).
 
-**Datasets.** `cre evaluate` ships two tasks, `aime` (numeric answers) and
-`teleqna` (multiple choice), each defining an answer parser and sampling
-preset. A new dataset with a different answer format needs one new `Task`
-entry (a parser + sampling) in [evaluate.py](src/cre_router/evaluate.py);
+**Datasets.** `cre evaluate` ships tasks for three benchmarks: `aime` and
+`telemath` (numeric answers) and `teleqna` (multiple choice), each defining an
+answer parser and sampling preset. A benchmark may also ship variants for a
+model's thinking and non-thinking modes, differing in sampling and in whether the
+prompt is pre-rendered. A new dataset with a different answer format needs one new
+`Task` entry (a parser + sampling) in [evaluate.py](src/cre_router/evaluate.py);
 clustering, routing, and the QE cascade are domain-agnostic and need no
 changes.
 
@@ -209,12 +211,19 @@ throughout.
   (1 = accept, 0/2 = escalate). Matches the released `ymoslem/*-router` datasets.
 - **Model stats** (`cre fit`): JSON with `cluster_sizes` and per-model `errors`
   and `cluster_tpot_ms`; see [`configs/aime_stats.json`](configs/aime_stats.json).
+  Fitting with `--cost-metric e2el` also needs `cluster_e2el_ms`, and `cre cascade`
+  additionally needs `cluster_output_tokens` to charge a discarded efficient pass
+  against the delivered answer; see
+  [`configs/aime_cascade_test.json`](configs/aime_cascade_test.json).
 - **Serving config** (`cre serve`): YAML; see
   [`example_config_aime24.yaml`](src/cre_router/server/example_config_aime24.yaml).
 
 An artifacts directory (written by `cre cluster` / `cre fit`) holds
-`centroids.npy`, `router.json` (embedding model, routing table, $\lambda^*$), and
-`train_assignments.jsonl`.
+`centroids.npy`, `router.json`, and `train_assignments.jsonl`. `router.json`
+carries the embedding model, the routing table, $\lambda^*$, the budget, the cost
+metric it was fitted under, and the pool stats. `cre serve` reads the last two
+back to derive the escalation ladder under the same metric that produced the
+table.
 
 ## Repository layout
 
@@ -229,6 +238,7 @@ cre-router/
 │   ├── qe/                      Stage 2: QE classifier
 │   │   ├── train.py             fine-tune the accept/escalate classifier
 │   │   ├── classifier.py        inference wrapper used by the router
+│   │   ├── cascade.py           replay the QE over saved generations (`cre qe-cascade`)
 │   │   └── evaluate.py          standalone QE metrics (`cre qe-eval`)
 │   └── server/                  live cascade router
 │       ├── cascade_router.py    Stage 1 routing + Stage 2 escalation ladder
@@ -236,7 +246,11 @@ cre-router/
 │       ├── example_config_aime24.yaml    serving config (AIME)
 │       └── example_config_teleqna.yaml   serving config (TeleQnA)
 ├── configs/                     checked-in per-model stats for `cre fit`
-├── data/download.py             fetch released datasets from the Hugging Face Hub
+├── data/
+│   ├── download.py              fetch released datasets from the Hugging Face Hub
+│   ├── prep_qe.py               build QE train/test splits from generation logs
+│   ├── prep_telemath.py         fetch and split TeleMath
+│   └── prep_gemma4_thinking.py  pre-render Gemma 4 prompts with thinking enabled
 ├── img/system.svg               architecture figure
 ├── tests/                       unit tests (routing math vs paper, cascade, ...)
 ├── requirements-paper.txt       frozen environment behind the paper's numbers

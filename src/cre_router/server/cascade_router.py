@@ -8,7 +8,8 @@ Stage 2: a quality-estimation (QE) cascade over an ordered escalation ladder
 (paper Sec. 5; the paper runs two-model pools, this generalises to more). The
 ladder is always derived from the arithmetic, never configured by hand: it
 follows the lambda table (as lambda rises the cheaper model wins), so the
-Pareto-efficient models ordered by ascending TPOT give the escalation order. Each model on the ladder (except
+Pareto-efficient models ordered by ascending cost give the escalation order,
+under whichever cost metric ``cre fit`` used. Each model on the ladder (except
 the strongest) has its own QE classifier trained on that model's outputs.
 Starting from the model Stage 1 picked, the router runs the QE classifier for
 the current model; on "escalate" it moves to the next stronger model and
@@ -271,11 +272,16 @@ def _escalation_order(config: dict, artifacts: RouterArtifacts) -> list[str]:
     arithmetic ``cre fit`` uses; it is never configured by hand.
 
     Build the pool from the fitted stats, drop Pareto-dominated models, and
-    order the survivors by ascending TPOT. This is exactly the lambda-table
+    order the survivors by ascending cost. This is exactly the lambda-table
     capability order (as lambda rises the cheaper, weaker model wins), so the
-    ladder cannot place a dominated model (slower yet less accurate) as a
+    ladder cannot place a dominated model (costlier yet less accurate) as a
     stronger rung. Only served models (present in the config) are kept, since
     each rung must be callable.
+
+    Cost means whichever metric ``cre fit`` used, read back from the artifacts.
+    Deriving the ladder under TPOT while the table was fitted under E2EL breaks
+    the correspondence, and on a pool mixing thinking and non-thinking members
+    the two metrics disagree about both pruning and order.
     """
     from cre_router.routing import models_from_stats, pareto_prune
 
@@ -284,8 +290,8 @@ def _escalation_order(config: dict, artifacts: RouterArtifacts) -> list[str]:
             "cannot derive the escalation ladder: the artifacts hold no stats. "
             "Run `cre fit --output <dir>` so the routing stats are stored."
         )
-    all_models, _ = models_from_stats(artifacts.stats)
+    all_models, _ = models_from_stats(artifacts.stats, artifacts.cost_metric)
     served = set(config["models"])
     pool = [m for m in all_models if m.name in served]
     efficient, _ = pareto_prune(pool)
-    return [m.name for m in sorted(efficient, key=lambda m: m.tpot_ms)]
+    return [m.name for m in sorted(efficient, key=lambda m: m.cost_ms)]
