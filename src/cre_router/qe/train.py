@@ -1,14 +1,28 @@
 """Fine-tune a binary accept/escalate QE classifier (paper Sec. 5.1, App. C).
 
-Consolidates the AIME and TeleQnA training scripts into one config-driven
-entry point. The dataset is expected to provide the columns ``question``,
-``full_output``, ``num_tokens``, and ``decision_label`` (label 2, "continue",
-is folded into 0, "route"), as in the released HF datasets
-``ymoslem/AIME-router`` and ``ymoslem/TeleQnA-router``.
+One config-driven entry point, with nothing specific to a benchmark. The
+dataset is expected to provide the columns ``question``, ``full_output``,
+``num_tokens``, and ``decision_label`` (label 2, "continue", is folded into 0,
+"route"), as in the released HF datasets ``ymoslem/AIME-router``,
+``ymoslem/TeleQnA-router``, and ``ymoslem/TeleMath-router``. ``--dataset``
+also takes a local directory of ``train*.jsonl`` and ``test*.jsonl`` written
+by ``data/prep_qe.py``, which is how a classifier for a new pool is trained.
 
-Usage (also exposed as ``cre qe-train``):
-    python -m cre_router.qe.train --dataset ymoslem/AIME-router \
+Pass ``--train-split`` and ``--eval-split`` whenever the dataset carries more
+than one pair. The defaults take the first split whose name starts with
+"train" and with "test", which identifies the right data only when there is a
+single pair, as in ``AIME-router`` and ``TeleQnA-router``. ``TeleMath-router``
+instead holds a pair per efficient tier (``e2b``, ``e4b_think``, ``m26``,
+``frugal_e2b``), and one classifier is trained per tier, so leaving the splits
+to the defaults there would train on whichever tier the loader happened to
+list first.
+
+Usage (``python -m cre_router.qe.train`` takes the same arguments):
+    cre qe-train --dataset ymoslem/AIME-router \
         --max-length 4096 --learning-rate 5e-5 --output-dir ./qe-aime
+    cre qe-train --dataset ymoslem/TeleMath-router \
+        --train-split train_e2b --eval-split test_e2b \
+        --max-length 4096 --output-dir ./qe-telemath-e2b
 """
 
 from __future__ import annotations
@@ -74,7 +88,7 @@ def main(argv: list[str] | None = None) -> None:
 
     set_seed(args.seed)
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
-    # A local directory of {train,test}.jsonl (from `python -m cre_router.data.prep_qe`)
+    # A local directory of {train,test}.jsonl (from `python data/prep_qe.py`)
     # loads via the json builder; anything else is a Hub dataset id.
     from pathlib import Path as _Path
 
