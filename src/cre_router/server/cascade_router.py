@@ -34,6 +34,7 @@ import numpy as np
 
 from cre_router.artifacts import RouterArtifacts
 from cre_router.clustering import assign_clusters
+from cre_router.routing import models_from_stats, pareto_prune
 
 logger = logging.getLogger(__name__)
 
@@ -283,8 +284,6 @@ def _escalation_order(config: dict, artifacts: RouterArtifacts) -> list[str]:
     the correspondence, and on a pool mixing thinking and non-thinking members
     the two metrics disagree about both pruning and order.
     """
-    from cre_router.routing import models_from_stats, pareto_prune
-
     if not (artifacts.stats or {}).get("models"):
         raise ValueError(
             "cannot derive the escalation ladder: the artifacts hold no stats. "

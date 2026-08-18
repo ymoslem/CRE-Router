@@ -110,12 +110,22 @@ class Region:
 
 def _nice_lambda(lo: float, hi: float) -> float:
     """A human-friendly lambda strictly inside (lo, hi): the fewest-decimals
-    round number if one fits, otherwise the midpoint."""
+    round number if one fits, otherwise the midpoint.
+
+    The bounds are tested on the rounded value, which is the one returned:
+    rounding a candidate that sits a hair below ``hi`` can push it onto the
+    exclusive upper bound, naming a lambda that routes as the next region.
+    Each decimal level tries the two highest multiples that could fit, so an
+    interval whose upper bound is itself round, such as [0.3, 0.5), is still
+    named with one decimal rather than falling through to a longer one.
+    """
     for decimals in range(1, 12):
         step = 10**-decimals
-        candidate = math.floor(hi / step) * step
-        if lo < candidate < hi:
-            return round(candidate, decimals)
+        highest = math.floor(hi / step)
+        for multiple in (highest, highest - 1):
+            candidate = round(multiple * step, decimals)
+            if lo < candidate < hi:
+                return candidate
     return (lo + hi) / 2
 
 

@@ -13,6 +13,7 @@ import pytest
 
 from cre_router.routing import (
     ModelStats,
+    _nice_lambda,
     assign,
     cascade_system_accuracy,
     cascade_system_metrics,
@@ -111,6 +112,42 @@ class TestLambdaSelection:
         models, sizes = aime
         with pytest.raises(ValueError, match="No routing strategy"):
             select_lambda(models, sizes, budget_ms=1.0)
+
+
+class TestRepresentativeLambda:
+    """lambda* only names a region, but it must name its own region: any value
+    reported for a region has to reproduce that region's assignment."""
+
+    # Three models over two clusters, chosen so the crossovers land on round
+    # numbers (0.1, 0.2, 0.3, 0.5). Measured data rarely does, which is why the
+    # naming bug below stayed hidden.
+    POOL = [
+        ModelStats(name="Small", tpot_ms=10.0, errors={"easy": 0.20, "hard": 0.60}),
+        ModelStats(name="Mid", tpot_ms=30.0, errors={"easy": 0.10, "hard": 0.35}),
+        ModelStats(name="Big", tpot_ms=50.0, errors={"easy": 0.05, "hard": 0.20}),
+    ]
+
+    def test_every_region_is_named_by_a_lambda_that_routes_the_same(self):
+        for region in routing_regions(self.POOL):
+            lam = region.representative_lambda
+            assert region.lam_min <= lam < region.lam_max
+            assert assign(self.POOL, lam) == region.assignment
+
+    def test_round_upper_bound_is_excluded(self):
+        """[0.1, 0.2) must not be named 0.2: rounding used to push the candidate
+        onto the exclusive bound, naming the next region's lambda."""
+        assert _nice_lambda(0.1, 0.2) < 0.2
+
+    def test_prefers_the_fewest_decimals_that_fit(self):
+        assert _nice_lambda(0.3, 0.5) == 0.4
+
+    @pytest.mark.parametrize(
+        "lo, hi, expected",
+        [(0.314, 0.456, 0.4), (2.046, 6.537, 6.5)],
+    )
+    def test_published_telemath_operating_points_are_unchanged(self, lo, hi, expected):
+        """The TPOT and E2EL operating points recorded in the results."""
+        assert _nice_lambda(lo, hi) == expected
 
 
 class TestTeleQnA:
