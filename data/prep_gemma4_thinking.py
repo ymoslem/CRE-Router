@@ -60,7 +60,20 @@ def main() -> None:
                         help="path prefix; _think.jsonl and _nothink.jsonl are appended")
     parser.add_argument("--model", default="google/gemma-4-E2B-it")
     parser.add_argument("--limit", type=int, default=0, help="0 means the whole file")
+    parser.add_argument("--force", action="store_true",
+                        help="overwrite the output files if they already exist")
     args = parser.parse_args()
+
+    # Refuse to clobber. `--out` is a prefix, so a rendered set and a set built
+    # any other way land on identical names, and a silent overwrite while a job
+    # is queued to read the file produces a mismatch nothing reports. Checked
+    # before the tokenizer loads, which is slow and can be killed for memory.
+    out = Path(args.out)
+    targets = [out.with_name(f"{out.name}{s}.jsonl") for s in ("_think", "_nothink")]
+    existing = [q for q in targets if q.exists()]
+    if existing and not args.force:
+        listed = ", ".join(str(q) for q in existing)
+        raise SystemExit(f"refusing to overwrite {listed}; pass --force to replace")
 
     from transformers import AutoTokenizer
 
@@ -74,8 +87,8 @@ def main() -> None:
     if args.limit:
         rows = rows[: args.limit]
 
-    out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+
     for enable_thinking, suffix in ((True, "_think"), (False, "_nothink")):
         rendered = render_rows(rows, tokenizer, enable_thinking)
         path = out.with_name(f"{out.name}{suffix}.jsonl")
