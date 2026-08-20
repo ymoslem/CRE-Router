@@ -20,6 +20,7 @@ from pathlib import Path
 
 from cre_router.artifacts import RouterArtifacts
 from cre_router.clustering import DEFAULT_EMBEDDING_MODEL
+from cre_router.evaluate import TASKS
 from cre_router.routing import (
     cascade_system_accuracy,
     cascade_system_metrics,
@@ -171,7 +172,6 @@ def cmd_cascade(args: argparse.Namespace) -> None:
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
     from cre_router.evaluate import (
-        TASKS,
         cluster_sizes,
         evaluate_model,
         merge_model_into_stats,
@@ -179,8 +179,6 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         save_raw_measurements,
     )
 
-    if args.task not in TASKS:
-        raise SystemExit(f"unknown task {args.task!r}; choose from {sorted(TASKS)}")
     task = TASKS[args.task]
 
     dataset = _read_jsonl(Path(args.dataset))
@@ -338,7 +336,8 @@ def main(argv: list[str] | None = None) -> None:
         "evaluate",
         help="measure per-cluster accuracy and TPOT for one model (requires [eval] + a running vLLM server)",
     )
-    p.add_argument("--task", required=True, help="dataset task: aime or teleqna")
+    p.add_argument("--task", required=True, choices=sorted(TASKS),
+                   help="dataset task")
     p.add_argument("--model", required=True, help="served model name (stats key and vLLM model id)")
     p.add_argument("--dataset", required=True, help="JSONL with prompt, answer[, cluster]")
     p.add_argument("--stats-out", required=True, help="stats JSON to create/update")
