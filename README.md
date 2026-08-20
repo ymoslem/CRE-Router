@@ -28,9 +28,9 @@ benchmark evaluation; no extra annotation is required.
 
 ### Choosing the cost metric
 
-Stage 1 scores each model with `Error(m, c) + lambda * Cost_norm(m)`. `Cost` is
-either time per output token (`--cost-metric tpot`, the default, which reproduces
-the published results) or end-to-end request latency (`--cost-metric e2el`).
+Stage 1 scores each model with `Error(m, c) + lambda * Cost_norm(m)`, where `Cost` is
+either time per output token (`--cost-metric tpot` (the default), which reproduces
+the published results), or end-to-end request latency (`--cost-metric e2el`).
 
 The two agree while pool members emit similar numbers of tokens, and diverge as
 soon as they do not. A reasoning model and a non-reasoning one can differ by less
@@ -39,22 +39,30 @@ than a millisecond in TPOT while differing several-fold in E2EL, because
 whenever the pool mixes thinking and non-thinking members, or verbose and terse
 ones.
 
-<p align="center"><img src="img/system.svg" alt="Two-stage cascaded routing system" width="640"></p>
+<p align="center"><img src="img/system.svg" alt="Two-stage cascaded routing system" width="760"></p>
 
 ## Pipeline
 
-The full workflow is driven by the `cre` CLI, one stage per step:
+The full workflow is driven by the `cre` CLI, one command per step:
 
 `cre cluster` → `cre evaluate` → `cre fit` → `cre qe-train` → `cre qe-cascade` → `cre serve`
 
 Serving (`cre serve`) switches between the live vLLM backends through [LiteLLM](https://github.com/BerriAI/litellm).
+`cre cascade` sits outside this chain: it composes the Stage 1 + 2 system
+accuracy and latency offline from measured stats, and is not a prerequisite for
+serving.
 
-The main key stages and options are summarized in the following table. For full flags for any stage, run: `cre <stage> --help`.
+The main commands and options are summarized in the following table. For full
+flags for any command, run:
 
-| Stage | What it does | Input | Output | Key options |
+```bash
+cre <command> --help
+```
+
+| Command | What it does | Input | Output | Key options |
 |---|---|---|---|---|
 | `cre cluster` | Embeds training queries and fits k-means centroids (k chosen by Silhouette) | JSONL of training queries | `centroids.npy` and `router.json`; `train_assignments.jsonl` | `--k`, `--embedding-model` |
-| `cre evaluate` | Runs each model per cluster through vLLM's benchmark, scores answers, averages per-cluster error and TPOT. This is the slowest stage; cost scales with model size, output length, and `--runs`, and it runs once per model. | dataset JSONL, a running vLLM server, fitted centroids | per-model entry in the stats JSON; raw runs under `results/` | `--runs`, `--concurrency`, `--save-generations`, `--artifacts` |
+| `cre evaluate` | Runs each model per cluster through vLLM's benchmark, scores answers, averages per-cluster error and TPOT. This is the slowest step; cost scales with model size, output length, and `--runs`, and it runs once per model. | dataset JSONL, a running vLLM server, fitted centroids | per-model entry in the stats JSON; raw runs under `results/` | `--runs`, `--concurrency`, `--save-generations`, `--artifacts` |
 | `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^*$ under the cost budget | stats JSON, budget B | routing table and $\lambda^*$ in `router.json` | `--budget` (required), `--cost-metric`, `--output` |
 | `cre qe-train` | Fine-tunes ModernBERT-base as the accept/escalate QE classifier | HF dataset of model outputs with correctness labels | QE classifier checkpoint | `--train-split`, `--eval-split`, `--learning-rate`, `--max-length` |
 | `cre qe-cascade` | Replays the trained QE over an efficient model's saved generations, composing per-cluster cascade accuracy and escalation counts | generations JSONL, the strong model's outcomes, a QE checkpoint | cascade config for `cre cascade` | `--clusters`, `--accept-threshold` |
@@ -117,11 +125,36 @@ cre fit --stats configs/aime_stats.json --budget 20
 ```
 
 This prints the Pareto analysis, the $\lambda$ sweep (routing regions), and the
-$\lambda^*$ selection. To regenerate the stats from scratch (clustering plus
-per-model measurement on a GPU), run `cre cluster` and `cre evaluate` on your
-own dataset and models, the same commands used for the paper (see the
-[Pipeline](#pipeline) table above). If you want to reproduce the paper's exact
-numbers with its datasets and models, see [REPRODUCE.md](REPRODUCE.md) instead.
+$\lambda^*$ selection. Regenerating the stats from scratch instead, by clustering
+and measuring each model yourself, needs a GPU: see
+[Measuring your own pool](#measuring-your-own-pool-gpu-required) below.
+
+## Measuring your own pool (GPU required)
+
+The section above reproduces a routing table from stats checked into the repo,
+and the one below serves a router built from one. This is the step that produces
+those stats in the first place: every model in the pool is run over your dataset
+and measured per cluster. It is the experiments path, and the slowest part of the
+pipeline.
+
+```bash
+# 1. embed and cluster the training queries
+cre cluster --input data/aime_train.jsonl --output artifacts/aime
+
+# 2. measure each model against a vLLM backend serving it (repeat per model)
+cre evaluate --task aime --model WeiboAI/VibeThinker-1.5B \
+    --dataset data/aime_train.jsonl --artifacts artifacts/aime \
+    --stats-out configs/aime_stats.json --runs 5 --save-generations
+
+# 3. compute the routing table and lambda*
+cre fit --stats configs/aime_stats.json --budget 20 --output artifacts/aime
+```
+
+Each `cre evaluate` call appends that model's entry to the stats JSON, so a pool
+is measured by repeating step 2 once per model. `--save-generations` also writes
+the per-question outputs Stage 2 trains on, and is worth passing even if you only
+want Stage 1 today. [REPRODUCE.md](REPRODUCE.md) carries the full worked sequence,
+including the QE classifier stages.
 
 ## Quickstart: serve CRE-Router (GPU required)
 
@@ -137,7 +170,8 @@ and config the same way once you see the shape of it.
    vllm serve Qwen/Qwen3-30B-A3B-Thinking-2507-FP8 --port 8002 --max-model-len 42000
    ```
 
-2. Fit centroids and write the routing table into an artifacts directory.
+2. Cluster the training queries and write the routing table into an artifacts
+   directory.
    Reusing the checked-in stats skips the GPU measurement step:
 
    ```bash
@@ -159,7 +193,10 @@ and config the same way once you see the shape of it.
    cre serve --config example_config_aime24.yaml
    ```
 
-4. Send a standard chat-completions request:
+4. Send a standard chat-completions request to the router on port 4000, not to
+   a vLLM backend. The endpoint is OpenAI-compatible, so an existing client
+   only needs its base URL changed. No `model` field is needed: choosing the
+   model per query is what the router does.
 
    ```bash
    curl http://localhost:4000/v1/chat/completions \
@@ -172,7 +209,8 @@ and config the same way once you see the shape of it.
    Streaming is not supported: Stage 2 must inspect the complete response before
    deciding whether to escalate it.
 
-5. Monitor the deployment. `GET /stats` returns live tallies (total requests,
+5. Monitor the deployment. `GET /health` and `GET /v1/models` are also served.
+   `GET /stats` returns live tallies (total requests,
    escalation rate, and counts per cluster, per final model, and per
    escalation path). Setting `decision_log: <path>` in the config also appends
    one JSON record per request to that file. Both are designed to add no
@@ -235,6 +273,7 @@ cre-router/
 │   ├── evaluate.py              Stage 1: measure per-cluster accuracy and TPOT via vLLM
 │   ├── artifacts.py             load/save centroids + routing table
 │   ├── cli.py                   the `cre` entry point
+│   ├── textutils.py             shared text helpers (strip reasoning blocks)
 │   ├── qe/                      Stage 2: QE classifier
 │   │   ├── train.py             fine-tune the accept/escalate classifier
 │   │   ├── classifier.py        inference wrapper used by the router
