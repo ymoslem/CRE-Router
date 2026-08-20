@@ -229,7 +229,23 @@ measure. The paper's pools are Qwen 3 / Qwen 3.5, Gemma 4, and VibeThinker
 `telemath` (numeric answers) and `teleqna` (multiple choice), each defining an
 answer parser and sampling preset. A benchmark may also ship variants for a
 model's thinking and non-thinking modes, differing in sampling and in whether the
-prompt is pre-rendered. A new dataset with a different answer format needs one new
+prompt is pre-rendered.
+
+| task | sampling | max tokens | prompt in the dataset |
+| --- | --- | --- | --- |
+| `aime`, `telemath` | 0.6 / 0.95 | 40,960 | raw, templated at serve time |
+| `telemath_nothink` | 0.7 / 0.8 | 16,384 | raw, templated at serve time |
+| `teleqna` | 0.7 / 0.8 | 1,024 | raw, templated at serve time |
+| `telemath_gemma4` | 0.6 / 0.95 | 40,960 | pre-rendered, served verbatim |
+
+Gemma 4's thinking switch is a chat-template keyword argument, and vLLM's
+benchmark loader does not forward it, so those prompts are rendered ahead of
+time by [prep_gemma4_thinking.py](data/prep_gemma4_thinking.py) and served with
+the template skipped. Mixing the two prompt kinds does not raise an error.
+Serving a raw prompt under `telemath_gemma4` loses the thinking switch, and
+serving a pre-rendered prompt under any other task applies the template twice.
+
+A new dataset with a different answer format needs one new
 `Task` entry (a parser + sampling) in [evaluate.py](src/cre_router/evaluate.py);
 clustering, routing, and the QE cascade are domain-agnostic and need no
 changes.
