@@ -13,6 +13,17 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+#: Two per-cluster error rates closer than this are treated as indistinguishable
+#: and the choice between those models falls to cost alone. Absolute, in error
+#: units: 0.001 is 0.1 percentage points, one unit of the precision the tables
+#: print. It is a robustness guard, not a tuned parameter -- on every pool
+#: published here it selects exactly what an exact comparison selects.
+DEFAULT_ERROR_TOL = 0.001
+
+#: Guard against binary floating point placing a gap that is ``tol`` by
+#: construction just above it: 0.231 - 0.230 evaluates to 1.0000000000000009e-3.
+_TOL_EPS = 1e-9
+
 
 @dataclass
 class ModelStats:
@@ -157,33 +168,122 @@ def normalized_costs(models: list[ModelStats]) -> dict[str, float]:
     return {m.name: (m.cost_ms - lo) / (hi - lo) for m in models}
 
 
-def assign(models: list[ModelStats], lam: float) -> dict[str, str]:
+def assign(
+    models: list[ModelStats], lam: float, error_tol: float = DEFAULT_ERROR_TOL
+) -> dict[str, str]:
     """Eq. 1: route each cluster to argmin_m Error(m, c) + lambda * Cost_norm(m),
-    breaking ties in favour of the faster model."""
+    breaking ties in favour of the faster model.
+
+    ``error_tol`` widens that tie-break: models whose error is within
+    ``error_tol`` of the argmin's are treated as indistinguishable on accuracy,
+    and the cheapest of them is chosen. Pass 0.0 for an exact comparison.
+
+    The tolerated set is anchored on the argmin, never chained pairwise, so a
+    run of near-ties cannot walk the choice away from the best model. Because
+    errors do not depend on lambda, that set can only change where the argmin
+    already changes, so the tolerance adds no region boundary. It can remove
+    one, by merging away a region that held only a within-tolerance preference.
+    """
     costs = normalized_costs(models)
     table = {}
     for c in clusters_of(models):
         best = min(models, key=lambda m: (m.errors[c] + lam * costs[m.name], m.cost_ms))
-        table[c] = best.name
+        tied = [m for m in models
+                if abs(m.errors[c] - best.errors[c]) <= error_tol + _TOL_EPS]
+        table[c] = min(tied, key=lambda m: (m.cost_ms, m.errors[c], m.name)).name
     return table
 
 
-def dominates(a: ModelStats, b: ModelStats) -> bool:
+@dataclass(frozen=True)
+class Margin:
+    """How far the chosen model beat the runner-up in one cluster.
+
+    ``gap`` is the difference in decision score. ``granularity`` is ``1/n`` for
+    that cluster: a cluster of n questions cannot resolve accuracy any finer, so
+    a gap below it means the two models are not distinguished by the data even
+    though the rule still picks one.
+    """
+
+    cluster: str
+    chosen: str
+    runner_up: str
+    gap: float
+    granularity: float
+
+    @property
+    def resolvable(self) -> bool:
+        """True when the margin exceeds what the cluster can measure."""
+        return self.gap >= self.granularity
+
+    @property
+    def ratio(self) -> float:
+        """Gap in units of granularity. Below 1.0 the choice rests on noise."""
+        return self.gap / self.granularity if self.granularity else math.inf
+
+
+def selection_margins(
+    models: list[ModelStats],
+    lam: float,
+    cluster_sizes: dict[str, float],
+    error_tol: float = DEFAULT_ERROR_TOL,
+) -> dict[str, Margin]:
+    """Per cluster, how decisively ``assign`` preferred the winner at ``lam``.
+
+    Purely diagnostic: it reports on the same choice ``assign`` makes and never
+    alters it. Use it to see whether an operating point rests on a real margin
+    or on a difference the test set is too small to measure.
+
+    ``cluster_sizes`` is the second value returned by :func:`models_from_stats`.
+    """
+    costs = normalized_costs(models)
+    chosen = assign(models, lam, error_tol)
+    out: dict[str, Margin] = {}
+    for c in clusters_of(models):
+        ranked = sorted(models, key=lambda m: (m.errors[c] + lam * costs[m.name], costs[m.name]))
+        n = float(cluster_sizes.get(c, 0) or 0)
+        # Report on whatever `assign` chose, so the two can never disagree. Where
+        # the tolerance overrode the score order, `gap` comes out negative, which
+        # reads correctly: the data did not support preferring the cheaper model,
+        # it only failed to rule it out.
+        best = next(m for m in models if m.name == chosen[c])
+        second = next(m for m in ranked if m.name != best.name)
+        out[c] = Margin(
+            cluster=c,
+            chosen=best.name,
+            runner_up=second.name,
+            gap=((second.errors[c] + lam * costs[second.name])
+                 - (best.errors[c] + lam * costs[best.name])),
+            granularity=(1.0 / n) if n else math.inf,
+        )
+    return out
+
+
+def dominates(
+    a: ModelStats, b: ModelStats, error_tol: float = DEFAULT_ERROR_TOL
+) -> bool:
     """True if ``a`` Pareto-dominates ``b``: no worse on cost and on every
-    cluster's error, and strictly better on at least one of those."""
+    cluster's error, and strictly better on at least one of those.
+
+    ``error_tol`` applies to both halves of that test, so an error advantage
+    smaller than the tolerance neither rescues ``b`` nor, on its own, condemns
+    it. Applying it to only one half would let two models dominate each other.
+    """
+    tol = error_tol + _TOL_EPS
     if a.cost_ms > b.cost_ms:
         return False
-    if any(a.errors[c] > b.errors[c] for c in b.errors):
+    if any(a.errors[c] > b.errors[c] + tol for c in b.errors):
         return False
-    return a.cost_ms < b.cost_ms or any(a.errors[c] < b.errors[c] for c in b.errors)
+    return a.cost_ms < b.cost_ms or any(a.errors[c] < b.errors[c] - tol for c in b.errors)
 
 
-def pareto_prune(models: list[ModelStats]) -> tuple[list[ModelStats], list[ModelStats]]:
+def pareto_prune(
+    models: list[ModelStats], error_tol: float = DEFAULT_ERROR_TOL
+) -> tuple[list[ModelStats], list[ModelStats]]:
     """Split the pool into (Pareto-efficient, dominated). Dominated models can
     never be selected by the routing score for any lambda."""
     efficient, dominated = [], []
     for m in models:
-        if any(dominates(other, m) for other in models if other.name != m.name):
+        if any(dominates(other, m, error_tol) for other in models if other.name != m.name):
             dominated.append(m)
         else:
             efficient.append(m)
@@ -208,16 +308,25 @@ def crossover_candidates(models: list[ModelStats]) -> list[float]:
     return sorted(lams)
 
 
-def routing_regions(models: list[ModelStats]) -> list[Region]:
+def routing_regions(
+    models: list[ModelStats], error_tol: float = DEFAULT_ERROR_TOL
+) -> list[Region]:
     """Sweep lambda from 0 upward and return the maximal regions with constant
     cluster-to-model assignment. Candidate boundaries that do not change the
-    argmin (possible for K > 2) are merged away."""
+    argmin (possible for K > 2) are merged away.
+
+    ``crossover_candidates`` needs no tolerance of its own: the tolerated set
+    that ``assign`` uses cannot change anywhere the argmin does not, so every
+    boundary it needs is already a candidate. A candidate that only separated
+    two within-tolerance choices no longer changes the assignment, and is
+    merged away here like any other unused one.
+    """
     edges = [0.0] + crossover_candidates(models)
     regions: list[Region] = []
     for i, lo in enumerate(edges):
         hi = edges[i + 1] if i + 1 < len(edges) else math.inf
         probe = (lo + hi) / 2 if not math.isinf(hi) else lo + max(lo * 0.5, 0.05)
-        table = assign(models, probe)
+        table = assign(models, probe, error_tol)
         if regions and regions[-1].assignment == table:
             regions[-1] = Region(regions[-1].lam_min, hi, table)
         else:
@@ -386,11 +495,12 @@ def eta(
     models: list[ModelStats],
     assignment: dict[str, str],
     cluster_sizes: dict[str, int | float],
+    error_tol: float = DEFAULT_ERROR_TOL,
 ) -> float | None:
     """Eq. 5: accuracy given up (percentage points) per millisecond of TPOT
     saved, relative to the lambda=0 baseline. Lower is better; None when the
     assignment equals the baseline."""
-    acc0, tpot0 = system_metrics(models, assign(models, 0.0), cluster_sizes)
+    acc0, tpot0 = system_metrics(models, assign(models, 0.0, error_tol), cluster_sizes)
     acc, tpot = system_metrics(models, assignment, cluster_sizes)
     if math.isclose(tpot0, tpot):
         return None
@@ -412,11 +522,12 @@ def select_lambda(
     models: list[ModelStats],
     cluster_sizes: dict[str, int | float],
     budget_ms: float,
+    error_tol: float = DEFAULT_ERROR_TOL,
 ) -> Selection:
     """Eq. 4: among all routing regions, pick the one with the highest training
     accuracy whose system TPOT satisfies the budget; ties favour lower TPOT."""
     best: tuple[float, float, Region] | None = None
-    for region in routing_regions(models):
+    for region in routing_regions(models, error_tol):
         acc, tpot = system_metrics(models, region.assignment, cluster_sizes)
         if tpot > budget_ms:
             continue
@@ -425,7 +536,7 @@ def select_lambda(
     if best is None:
         fastest = min(
             system_metrics(models, r.assignment, cluster_sizes)[1]
-            for r in routing_regions(models)
+            for r in routing_regions(models, error_tol)
         )
         metric = models[0].cost_metric.upper() if models else "cost"
         raise ValueError(
@@ -440,12 +551,28 @@ def select_lambda(
         region=region,
         accuracy=acc,
         tpot_ms=tpot,
-        eta=eta(models, region.assignment, cluster_sizes),
+        eta=eta(models, region.assignment, cluster_sizes, error_tol),
     )
 
 
+def error_tol_from_stats(stats: dict) -> float:
+    """Read the pool's error tolerance from a stats dict, or the default.
+
+    Kept as config rather than a literal in the argmin so that setting it to 0.0
+    reproduces an exact comparison without touching the code, which is what the
+    regression gate exercises.
+    """
+    value = stats.get("error_tol", DEFAULT_ERROR_TOL)
+    if value is None:
+        return DEFAULT_ERROR_TOL
+    value = float(value)
+    if value < 0.0:
+        raise ValueError(f"error_tol must be non-negative, got {value}")
+    return value
+
+
 def models_from_stats(
-    stats: dict, cost_metric: str = "tpot"
+    stats: dict, cost_metric: str = "tpot", cost_weighting: str = "size"
 ) -> tuple[list[ModelStats], dict[str, float]]:
     """Build ``ModelStats`` from a stats dict (see configs/*_stats.json).
 
@@ -466,6 +593,22 @@ def models_from_stats(
     ``cost_metric`` defaults to ``"tpot"``, under which this reads exactly the
     fields it always has and reproduces published results unchanged.
     """
+    sizes = {str(k): float(v) for k, v in stats.get("cluster_sizes", {}).items()}
+
+    def _collapse(per_cluster: dict[str, float]) -> float:
+        """Collapse per-cluster cost to the one scalar Eq. 2 normalises.
+
+        Weighted by cluster size, so the result is the expected cost of a query
+        if the whole corpus were served by this model. An unweighted mean would
+        give a 51-query cluster the same say as a 98-query one, which
+        corresponds to no real workload. Falls back to the unweighted mean when
+        cluster sizes are unavailable.
+        """
+        if cost_weighting == "unweighted" or not sizes:
+            return sum(per_cluster.values()) / len(per_cluster)
+        total = sum(sizes[c] for c in per_cluster)
+        return sum(sizes[c] * v for c, v in per_cluster.items()) / total
+
     models = []
     for name, spec in stats["models"].items():
         cluster_tpot = {str(k): float(v) for k, v in spec.get("cluster_tpot_ms", {}).items()}
@@ -473,12 +616,12 @@ def models_from_stats(
         if tpot is None:
             if not cluster_tpot:
                 raise ValueError(f"Model {name!r} needs tpot_ms or cluster_tpot_ms")
-            tpot = sum(cluster_tpot.values()) / len(cluster_tpot)
+            tpot = _collapse(cluster_tpot)
 
         cluster_e2el = {str(k): float(v) for k, v in spec.get("cluster_e2el_ms", {}).items()}
         e2el = spec.get("e2el_ms")
         if e2el is None and cluster_e2el:
-            e2el = sum(cluster_e2el.values()) / len(cluster_e2el)
+            e2el = _collapse(cluster_e2el)
 
         cluster_tokens = {
             str(k): float(v) for k, v in spec.get("cluster_output_tokens", {}).items()

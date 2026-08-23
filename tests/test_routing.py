@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from cre_router.routing import (
+    DEFAULT_ERROR_TOL,
     ModelStats,
     _nice_lambda,
     assign,
@@ -20,6 +21,8 @@ from cre_router.routing import (
     cascade_system_metrics_ntier,
     cluster_cascade_accuracy,
     crossover_candidates,
+    dominates,
+    error_tol_from_stats,
     eta,
     models_from_stats,
     normalized_costs,
@@ -27,6 +30,7 @@ from cre_router.routing import (
     routing_regions,
     select_lambda,
     system_metrics,
+    selection_margins,
 )
 
 CONFIGS = Path(__file__).parent.parent / "configs"
@@ -143,10 +147,16 @@ class TestRepresentativeLambda:
 
     @pytest.mark.parametrize(
         "lo, hi, expected",
-        [(0.314, 0.456, 0.4), (2.046, 6.537, 6.5)],
+        [(0.313, 0.467, 0.4), (1.972, 6.157, 6.1)],
     )
     def test_published_telemath_operating_points_are_unchanged(self, lo, hi, expected):
-        """The TPOT and E2EL operating points recorded in the results."""
+        """The TPOT and E2EL operating points recorded in the results.
+
+        Boundaries are the size-weighted ones; the earlier pair (0.314, 0.456)
+        and (2.046, 6.537) came from the unweighted cost scalar and named 6.5
+        for the E2EL point rather than 6.1. Source:
+        `ref/results/telemath/lambda_sweep_full.md`.
+        """
         assert _nice_lambda(lo, hi) == expected
 
 
@@ -336,3 +346,246 @@ class TestCascadeSystemAccuracy:
 
     def test_teleqna_config_reproduces_743(self):
         assert self._cascade_acc_from_config("teleqna_cascade_test.json") == pytest.approx(0.743, abs=0.001)
+
+
+# ---------------------------------------------------------------------------
+# Cost-scalar weighting.
+#
+# models_from_stats collapses per-cluster cost into the one scalar Eq. 2
+# normalises. Every fixture above uses a single cluster or equal-sized ones,
+# where weighted and unweighted agree, so none of them can detect a regression
+# here. These use deliberately unequal clusters.
+# ---------------------------------------------------------------------------
+
+_UNEQUAL = {
+    "cluster_sizes": {"0": 90, "1": 10},
+    "models": {
+        # cheap in the big cluster, dear in the small one: the two conventions
+        # disagree by a wide margin
+        "skewed": {"errors": {"0": 0.2, "1": 0.2},
+                   "cluster_tpot_ms": {"0": 10.0, "1": 100.0},
+                   "cluster_e2el_ms": {"0": 1000.0, "1": 9000.0}},
+        "flat":   {"errors": {"0": 0.3, "1": 0.3},
+                   "cluster_tpot_ms": {"0": 20.0, "1": 20.0},
+                   "cluster_e2el_ms": {"0": 2000.0, "1": 2000.0}},
+    },
+}
+
+
+def test_cost_scalar_is_size_weighted_by_default():
+    models, _ = models_from_stats(_UNEQUAL)
+    by = {m.name: m for m in models}
+    # (90*10 + 10*100) / 100 = 19.0, against an unweighted (10+100)/2 = 55.0
+    assert by["skewed"].tpot_ms == pytest.approx(19.0)
+    assert by["flat"].tpot_ms == pytest.approx(20.0)
+
+
+def test_unweighted_opt_out_reproduces_the_old_scalar():
+    models, _ = models_from_stats(_UNEQUAL, cost_weighting="unweighted")
+    by = {m.name: m for m in models}
+    assert by["skewed"].tpot_ms == pytest.approx(55.0)
+    assert by["flat"].tpot_ms == pytest.approx(20.0)
+
+
+def test_weighting_can_flip_which_model_is_cheaper():
+    """The whole point: on unequal clusters the conventions can disagree."""
+    w, _ = models_from_stats(_UNEQUAL)
+    u, _ = models_from_stats(_UNEQUAL, cost_weighting="unweighted")
+    wby = {m.name: m.tpot_ms for m in w}
+    uby = {m.name: m.tpot_ms for m in u}
+    assert wby["skewed"] < wby["flat"], "size-weighted: skewed is cheaper"
+    assert uby["skewed"] > uby["flat"], "unweighted: skewed looks dearer"
+
+
+def test_e2el_scalar_is_weighted_too():
+    models, _ = models_from_stats(_UNEQUAL, cost_metric="e2el")
+    by = {m.name: m for m in models}
+    # (90*1000 + 10*9000) / 100 = 1800.0, against unweighted 5000.0
+    assert by["skewed"].e2el_ms == pytest.approx(1800.0)
+
+
+def test_equal_clusters_are_unaffected_by_the_convention():
+    equal = {
+        "cluster_sizes": {"0": 50, "1": 50},
+        "models": {"m": {"errors": {"0": 0.1, "1": 0.2},
+                         "cluster_tpot_ms": {"0": 10.0, "1": 30.0}}},
+    }
+    w, _ = models_from_stats(equal)
+    u, _ = models_from_stats(equal, cost_weighting="unweighted")
+    assert w[0].tpot_ms == pytest.approx(u[0].tpot_ms) == pytest.approx(20.0)
+
+
+def test_stored_scalar_still_wins_over_per_cluster():
+    """A stats file that stores tpot_ms is untouched by either convention."""
+    stored = {
+        "cluster_sizes": {"0": 90, "1": 10},
+        "models": {"m": {"tpot_ms": 42.0, "errors": {"0": 0.1, "1": 0.2},
+                         "cluster_tpot_ms": {"0": 10.0, "1": 100.0}}},
+    }
+    for weighting in ("size", "unweighted"):
+        models, _ = models_from_stats(stored, cost_weighting=weighting)
+        assert models[0].tpot_ms == pytest.approx(42.0)
+
+
+class TestSelectionMargins:
+    """`selection_margins` reports on the choice `assign` makes; it never alters it."""
+
+    POOL = [
+        ModelStats(name="cheap", tpot_ms=10.0, errors={"0": 0.30, "1": 0.30}),
+        ModelStats(name="dear", tpot_ms=20.0, errors={"0": 0.10, "1": 0.295}),
+    ]
+    SIZES = {"0": 100.0, "1": 100.0}
+
+    def test_it_agrees_with_assign(self):
+        for lam in (0.0, 0.05, 0.15, 0.3):
+            chosen = {c: m.chosen for c, m in
+                      selection_margins(self.POOL, lam, self.SIZES).items()}
+            assert chosen == assign(self.POOL, lam)
+
+    def test_a_wide_margin_is_resolvable(self):
+        """C0: 0.20 of error separates the pair, far above 1/100."""
+        m = selection_margins(self.POOL, 0.0, self.SIZES)["0"]
+        assert m.chosen == "dear" and m.resolvable
+        assert m.ratio > 10
+
+    def test_a_margin_below_one_question_is_not(self):
+        """C1: the pair differ by 0.005, half the 1/100 a cluster resolves.
+
+        Deliberately above DEFAULT_ERROR_TOL, so this exercises the diagnostic
+        rather than the tie-break: a margin the data cannot support, which the
+        tolerance is nevertheless too small to treat as a tie.
+        """
+        m = selection_margins(self.POOL, 0.0, self.SIZES)["1"]
+        assert m.chosen == "dear" and m.runner_up == "cheap"
+        assert m.gap == pytest.approx(0.005)
+        assert not m.resolvable
+        assert m.ratio == pytest.approx(0.5)
+
+    def test_granularity_follows_cluster_size(self):
+        small = selection_margins(self.POOL, 0.0, {"0": 10.0, "1": 10.0})["1"]
+        large = selection_margins(self.POOL, 0.0, {"0": 1000.0, "1": 1000.0})["1"]
+        assert small.granularity == pytest.approx(0.1)
+        assert large.granularity == pytest.approx(0.001)
+        assert not small.resolvable and large.resolvable
+
+    def test_it_still_agrees_when_the_tolerance_fires(self):
+        """A gap inside the tolerance flips `assign` to the cheaper model, and
+        the diagnostic must follow rather than report the score winner."""
+        pool = [
+            ModelStats(name="cheap", tpot_ms=10.0, errors={"0": 0.231}),
+            ModelStats(name="dear", tpot_ms=20.0, errors={"0": 0.230}),
+        ]
+        assert assign(pool, 0.0) == {"0": "cheap"}
+        assert assign(pool, 0.0, error_tol=0.0) == {"0": "dear"}
+        m = selection_margins(pool, 0.0, {"0": 100.0})["0"]
+        assert m.chosen == "cheap" and m.runner_up == "dear"
+        assert not m.resolvable
+
+    def test_a_missing_cluster_size_is_never_called_resolvable(self):
+        m = selection_margins(self.POOL, 0.0, {})["1"]
+        assert math.isinf(m.granularity) and not m.resolvable
+
+
+class TestErrorTolerance:
+    """`error_tol` treats near-equal per-cluster errors as indistinguishable and
+    lets cost decide. It never overrides a difference larger than itself."""
+
+    @staticmethod
+    def _pair(e_cheap: float, e_dear: float) -> list[ModelStats]:
+        return [
+            ModelStats(name="cheap", tpot_ms=10.0, errors={"0": e_cheap}),
+            ModelStats(name="dear", tpot_ms=20.0, errors={"0": e_dear}),
+        ]
+
+    def test_a_gap_inside_the_tolerance_falls_to_cost(self):
+        pool = self._pair(0.231, 0.230)
+        assert assign(pool, 0.0, error_tol=0.001) == {"0": "cheap"}
+        assert assign(pool, 0.0, error_tol=0.0) == {"0": "dear"}
+
+    def test_the_float_boundary_is_guarded(self):
+        """0.231 - 0.230 evaluates to 1.0000000000000009e-3, so a bare `<=`
+        would refuse a gap that is 0.001 by construction. Four decades of it."""
+        for a, b in ((0.231, 0.230), (0.331, 0.330), (0.431, 0.430), (0.531, 0.530)):
+            assert (a - b) > 0.001, "the premise: naive comparison fails here"
+            assert assign(self._pair(a, b), 0.0, error_tol=0.001) == {"0": "cheap"}
+
+    def test_a_gap_outside_the_tolerance_is_respected(self):
+        pool = self._pair(0.240, 0.230)
+        assert assign(pool, 0.0, error_tol=0.001) == {"0": "dear"}
+
+    def test_it_only_ever_moves_the_choice_towards_the_cheaper_model(self):
+        pool = self._pair(0.230, 0.231)          # cheap is also more accurate
+        assert assign(pool, 0.0, error_tol=0.001) == {"0": "cheap"}
+        assert assign(pool, 0.0, error_tol=0.0) == {"0": "cheap"}
+
+    def test_the_tolerated_set_is_anchored_not_chained(self):
+        """A chain of within-tolerance steps must not walk the choice away from
+        the argmin: `far` is 0.001 from `mid` but 0.002 from the best error."""
+        pool = [
+            ModelStats(name="far", tpot_ms=1.0, errors={"0": 0.232}),
+            ModelStats(name="mid", tpot_ms=10.0, errors={"0": 0.231}),
+            ModelStats(name="best", tpot_ms=20.0, errors={"0": 0.230}),
+        ]
+        assert assign(pool, 0.0, error_tol=0.001) == {"0": "mid"}
+
+    def test_it_introduces_no_new_region_boundaries(self):
+        """Errors do not depend on lambda, so the tolerated set can only change
+        where the argmin already changes: every tolerant boundary is one the
+        exact sweep already had. It can still *remove* one, by merging away a
+        region that existed only to hold a within-tolerance preference.
+        """
+        pool = [
+            ModelStats(name="cheap", tpot_ms=10.0, errors={"0": 0.30, "1": 0.231}),
+            ModelStats(name="dear", tpot_ms=20.0, errors={"0": 0.10, "1": 0.230}),
+        ]
+        exact = [r.lam_min for r in routing_regions(pool, error_tol=0.0)]
+        tolerant = [r.lam_min for r in routing_regions(pool, error_tol=0.001)]
+        assert set(tolerant) <= set(exact)
+        # here it does remove one: the exact sweep opens with a [0, 0.001)
+        # region where `dear` takes C1 on a 0.001 error advantage
+        assert exact == [0.0, 0.001, 0.2] and tolerant == [0.0, 0.2]
+
+    def test_domination_is_never_mutual(self):
+        """The tolerance applies to both halves of the test, so two models
+        within it of each other cannot each dominate the other."""
+        a = ModelStats(name="a", tpot_ms=10.0, errors={"0": 0.231})
+        b = ModelStats(name="b", tpot_ms=10.0, errors={"0": 0.230})
+        assert not (dominates(a, b, 0.001) and dominates(b, a, 0.001))
+
+    def test_a_within_tolerance_advantage_does_not_rescue_a_dominated_model(self):
+        cheap_good = ModelStats(name="cheap_good", tpot_ms=10.0, errors={"0": 0.231})
+        dear_equal = ModelStats(name="dear_equal", tpot_ms=20.0, errors={"0": 0.230})
+        assert dominates(cheap_good, dear_equal, 0.001)
+        assert not dominates(cheap_good, dear_equal, 0.0)
+
+    def test_the_default_is_the_published_constant(self):
+        assert DEFAULT_ERROR_TOL == 0.001
+        pool = self._pair(0.231, 0.230)
+        assert assign(pool, 0.0) == assign(pool, 0.0, error_tol=DEFAULT_ERROR_TOL)
+
+    def test_it_is_read_from_config_and_validated(self):
+        assert error_tol_from_stats({}) == DEFAULT_ERROR_TOL
+        assert error_tol_from_stats({"error_tol": None}) == DEFAULT_ERROR_TOL
+        assert error_tol_from_stats({"error_tol": 0.0}) == 0.0
+        assert error_tol_from_stats({"error_tol": 0.004}) == 0.004
+        with pytest.raises(ValueError):
+            error_tol_from_stats({"error_tol": -0.001})
+
+    def test_the_shipped_configs_are_unchanged_by_the_tolerance(self):
+        """The published claim: on every pool in this repo the tolerance selects
+        exactly what an exact comparison selects."""
+        root = Path(__file__).resolve().parents[1]
+        for name in ("aime_stats.json", "teleqna_stats.json"):
+            stats = json.loads((root / "configs" / name).read_text())
+            assert stats["error_tol"] == DEFAULT_ERROR_TOL, name
+            for metric in ("tpot", "e2el"):
+                try:
+                    models, sizes = models_from_stats(stats, metric)
+                except (KeyError, ValueError):
+                    continue
+                exact_eff, _ = pareto_prune(models, 0.0)
+                tol_eff, _ = pareto_prune(models, DEFAULT_ERROR_TOL)
+                assert [m.name for m in exact_eff] == [m.name for m in tol_eff], (name, metric)
+                assert ([(r.lam_min, r.assignment) for r in routing_regions(models, 0.0)]
+                        == [(r.lam_min, r.assignment)
+                            for r in routing_regions(models, DEFAULT_ERROR_TOL)]), (name, metric)

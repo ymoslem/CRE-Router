@@ -1,5 +1,7 @@
 # CRE-Router
 
+[![arXiv](https://img.shields.io/badge/arXiv-2606.27457-b31b1b.svg?labelColor=3C3F42)](https://arxiv.org/abs/2606.27457)
+[![PyPI](https://img.shields.io/pypi/v/cre-router.svg?labelColor=3C3F42)](https://pypi.org/project/cre-router/)
 [![tests](https://github.com/ymoslem/CRE-Router/actions/workflows/tests.yml/badge.svg)](https://github.com/ymoslem/CRE-Router/actions/workflows/tests.yml)
 
 Implementation of the paper, [**Cluster, Route, Escalate: Cascaded Framework for Cost-Aware LLM Serving**](https://arxiv.org/abs/2606.27457).
@@ -39,6 +41,21 @@ than a millisecond in TPOT while differing several-fold in E2EL, because
 whenever the pool mixes thinking and non-thinking members, or verbose and terse
 ones.
 
+### Near-equal error rates
+
+A cluster of `n` questions cannot resolve accuracy any finer than `1/n`, so a
+model chosen on a smaller error difference than that is chosen on noise. Stage 1
+therefore treats two models whose per-cluster error rates differ by no more than
+`--error-tol` (default `0.001`, one tenth of a percentage point) as
+indistinguishable on accuracy, and picks the cheaper of them. The same tolerance
+applies to Pareto pruning, on both halves of the domination test.
+
+It is a robustness guard rather than a tuned parameter. On every pool in this
+repository it selects exactly what an exact comparison selects: the smallest
+non-zero error gap that any sweep actually rests on is 0.0038, nearly four times
+the tolerance. Set it from the stats file with `"error_tol"`, or per run with
+`--error-tol`; pass `--error-tol 0` for an exact comparison.
+
 <p align="center"><img src="img/system.svg" alt="Two-stage cascaded routing system" width="760"></p>
 
 ## Pipeline
@@ -63,7 +80,7 @@ cre <command> --help
 |---|---|---|---|---|
 | `cre cluster` | Embeds training queries and fits k-means centroids (k chosen by Silhouette) | JSONL of training queries | `centroids.npy` and `router.json`; `train_assignments.jsonl` | `--k`, `--embedding-model` |
 | `cre evaluate` | Runs each model per cluster through vLLM's benchmark, scores answers, averages per-cluster error and TPOT. This is the slowest step; cost scales with model size, output length, and `--runs`, and it runs once per model. | dataset JSONL, a running vLLM server, fitted centroids | per-model entry in the stats JSON; raw runs under `results/` | `--runs`, `--concurrency`, `--save-generations`, `--artifacts` |
-| `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^*$ under the cost budget | stats JSON, budget B | routing table and $\lambda^*$ in `router.json` | `--budget` (required), `--cost-metric`, `--output` |
+| `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^*$ under the cost budget | stats JSON, budget B | routing table and $\lambda^*$ in `router.json` | `--budget` (required), `--cost-metric`, `--error-tol`, `--output` |
 | `cre qe-train` | Fine-tunes ModernBERT-base as the accept/escalate QE classifier | HF dataset of model outputs with correctness labels | QE classifier checkpoint | `--train-split`, `--eval-split`, `--learning-rate`, `--max-length` |
 | `cre qe-cascade` | Replays the trained QE over an efficient model's saved generations, composing per-cluster cascade accuracy and escalation counts | generations JSONL, the strong model's outcomes, a QE checkpoint | cascade config for `cre cascade` | `--clusters`, `--accept-threshold` |
 | `cre cascade` | Composes Stage 1+2 system accuracy and latency, under TPOT and E2EL, from measured stats | cascade config | system accuracy, TPOT, E2EL | `--stats` |
@@ -263,7 +280,8 @@ throughout.
 - **QE dataset** (`cre qe-train`, `cre qe-eval`): `question`, `full_output`
   (the model's completion), `num_tokens` (output length), and `decision_label`
   (1 = accept, 0/2 = escalate). Matches the released `ymoslem/*-router` datasets.
-- **Model stats** (`cre fit`): JSON with `cluster_sizes` and per-model `errors`
+- **Model stats** (`cre fit`): JSON with `cluster_sizes`, an optional pool-level
+  `error_tol`, and per-model `errors`
   and `cluster_tpot_ms`; see [`configs/aime_stats.json`](configs/aime_stats.json).
   Fitting with `--cost-metric e2el` also needs `cluster_e2el_ms`, and `cre cascade`
   additionally needs `cluster_output_tokens` to charge a discarded efficient pass

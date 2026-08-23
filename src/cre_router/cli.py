@@ -24,6 +24,7 @@ from cre_router.evaluate import TASKS
 from cre_router.routing import (
     cascade_system_accuracy,
     cascade_system_metrics,
+    error_tol_from_stats,
     eta,
     models_from_stats,
     pareto_prune,
@@ -87,8 +88,10 @@ def cmd_cluster(args: argparse.Namespace) -> None:
 def cmd_fit(args: argparse.Namespace) -> None:
     stats = json.loads(Path(args.stats).read_text())
     models, cluster_sizes = models_from_stats(stats, args.cost_metric)
+    error_tol = (error_tol_from_stats(stats) if args.error_tol is None
+                 else float(args.error_tol))
 
-    efficient, dominated = pareto_prune(models)
+    efficient, dominated = pareto_prune(models, error_tol)
     label = args.cost_metric.upper()
     # eta is accuracy points per millisecond of cost. That reads well for TPOT
     # (single-digit ms) but collapses to 0.00 for E2EL, whose costs run to
@@ -107,16 +110,16 @@ def cmd_fit(args: argparse.Namespace) -> None:
     header = f"  {'lambda range':>16}  " + "  ".join(f"{('C' + c):>24}" for c in clusters) \
         + f"  {'Acc':>7}  {label:>11}  {('eta ' + eta_unit):>10}"
     print(header)
-    for region in routing_regions(efficient):
+    for region in routing_regions(efficient, error_tol):
         acc, cost = system_metrics(efficient, region.assignment, cluster_sizes)
-        e = eta(efficient, region.assignment, cluster_sizes)
+        e = eta(efficient, region.assignment, cluster_sizes, error_tol)
         row = f"  {region.interval_str:>16}  " + "  ".join(
             f"{region.assignment[c]:>24}" for c in clusters
         ) + f"  {acc:>6.1%}  {cost:>9.1f}ms  " + (
             f"{e * eta_scale:>10.3f}" if e is not None else f"{'---':>10}")
         print(row)
 
-    selection = select_lambda(efficient, cluster_sizes, args.budget)
+    selection = select_lambda(efficient, cluster_sizes, args.budget, error_tol)
     print(f"\nBudget B = {args.budget} ms {label}  ->  lambda* = {selection.lambda_star}")
     print(f"  assignment: {selection.region.assignment}")
     print(f"  training accuracy {selection.accuracy:.1%} at {selection.tpot_ms:.1f} ms {label}"
@@ -362,6 +365,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--stats", required=True, help="JSON stats file (see configs/)")
     p.add_argument("--budget", type=float, required=True,
                    help="cost budget B in ms, in the units of --cost-metric")
+    p.add_argument("--error-tol", type=float, default=None,
+                   help="per-cluster error difference treated as indistinguishable, so the "
+                        "choice falls to cost; default reads 'error_tol' from --stats "
+                        "(0.001 if absent). Pass 0 for an exact comparison.")
     p.add_argument("--cost-metric", choices=("tpot", "e2el"), default="tpot",
                    help="measurement used as Cost: 'tpot' (default, reproduces the "
                         "published results) or 'e2el' end-to-end request latency, "
