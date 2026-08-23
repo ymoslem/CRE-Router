@@ -528,6 +528,22 @@ def save_raw_measurements(measurements: list[RunMeasurement], path: str | Path) 
 # ---------------------------------------------------------------------------
 
 
+def _detail_name(task, model: str, cluster: str, run: int) -> str:
+    """Filename for one (task, model, cluster, run) detailed benchmark dump.
+
+    vLLM's default is ``{label}-{rate}qps-{model}-{datetime}.json``, which
+    carries neither cluster nor run and so collides across a sweep and cannot be
+    joined back to anything. This name is sortable, unique per measurement, and
+    parseable: the analysis finds a run by globbing
+    ``detail_<task>_<model>_c<cluster>_r<run>.json``.
+
+    The model id is slashed (``google/gemma-4-E2B-it``), so flatten it the same
+    way the results directories already do.
+    """
+    flat = str(model).replace("/", "_")
+    return f"detail_{task.name}_{flat}_c{cluster}_r{run}.json"
+
+
 def run_vllm_benchmark(
     dataset_path: str | Path,
     model: str,
@@ -538,6 +554,7 @@ def run_vllm_benchmark(
     max_concurrency: int = 32,
     seed: int = 0,
     download_dir: str | None = None,
+    detail_path: str | Path | None = None,
 ) -> dict:
     """Run ``vllm bench serve`` against a running vLLM server and return its
     result dict (which includes ``generated_texts`` and ``mean_tpot_ms``).
@@ -597,10 +614,22 @@ def run_vllm_benchmark(
     # process_one_metric). Ask for it explicitly so `--cost-metric e2el` reads a
     # measured value instead of falling back to reconstructing it from means.
     args.percentile_metrics = "ttft,tpot,itl,e2el"
-    args.save_result = False
-    # Keep the per-request fields (generated_texts, errors) in the returned
-    # dict; without this vLLM strips them for a summary-only result.
+    # `save_detailed` only enriches the returned dict -- it does NOT write
+    # anything. vLLM writes its JSON only when `save_result` is True. Having
+    # the first without the second is why the TeleMath runs kept
+    # `generated_texts` and `output_lens` (which we harvest by hand) but lost
+    # `ttfts` and `itls`, leaving per-request latency unrecoverable and cost
+    # intervals stuck at n = 5 runs.
     args.save_detailed = True
+    args.save_result = detail_path is not None
+    if detail_path is not None:
+        detail_path = Path(detail_path)
+        detail_path.parent.mkdir(parents=True, exist_ok=True)
+        # vLLM writes to result_dir/result_filename verbatim, so name the file
+        # ourselves rather than take its {label}-{rate}qps-{model}-{dt} default:
+        # that default carries no cluster or run and collides across the sweep.
+        args.result_dir = str(detail_path.parent)
+        args.result_filename = detail_path.name
     if download_dir is not None:
         args.download_dir = download_dir
 
@@ -678,6 +707,7 @@ def evaluate_model(
     workdir: str | Path = "results/splits",
     download_dir: str | None = None,
     benchmark: Callable[..., dict] | None = None,
+    detail_dir: str | Path | None = None,
     outcomes_out: str | Path | None = None,
     generations_out: str | Path | None = None,
 ) -> list[RunMeasurement]:
@@ -723,6 +753,11 @@ def evaluate_model(
                 max_concurrency=max_concurrency,
                 seed=base_seed + run,
                 download_dir=download_dir,
+                # passed only when requested, so an injected benchmark that
+                # predates this argument keeps working
+                **({"detail_path": Path(detail_dir)
+                    / _detail_name(task, model, cluster, run)}
+                   if detail_dir is not None else {}),
             )
             error, correct = score_generations(
                 result["generated_texts"], gold, task.parse, task.match

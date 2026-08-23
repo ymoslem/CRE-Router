@@ -7,6 +7,7 @@ import pytest
 
 from cre_router.evaluate import (
     SCORER_VERSION,
+    _detail_name,
     TASKS,
     RunMeasurement,
     aggregate_runs,
@@ -319,3 +320,58 @@ class TestEvaluateModelWithFakeBenchmark:
                 workdir=tmp_path / "splits",
                 benchmark=bad_benchmark,
             )
+
+
+class TestDetailedCapture:
+    """`save_detailed` is inert without `save_result`: vLLM enriches the returned
+    dict but writes nothing. The TeleMath runs had the first and not the second,
+    which is why per-request `ttfts`/`itls` were lost and cost intervals are
+    stuck at n = 5 runs. These tests pin the fix."""
+
+    DATASET = [
+        {"prompt": "q0", "answer": 1, "cluster": 0},
+        {"prompt": "q1", "answer": 3, "cluster": 1},
+    ]
+
+    @staticmethod
+    def _reply(dataset_path):
+        rows = [json.loads(line) for line in open(dataset_path)]
+        replies = {"q0": "Answer: 1", "q1": "Answer: 3"}
+        return {"generated_texts": [replies[r["prompt"]] for r in rows],
+                "mean_tpot_ms": 10.0, "output_lens": [5] * len(rows)}
+
+    def test_no_detail_path_when_not_requested(self, tmp_path):
+        """An injected benchmark predating this argument must keep working."""
+        seen = []
+
+        def fake(dataset_path, model, task, **kw):
+            seen.append(kw)
+            return self._reply(dataset_path)
+
+        evaluate_model(self.DATASET, "m", TASKS["aime"], runs=1,
+                       workdir=tmp_path / "splits", benchmark=fake)
+        assert seen and all("detail_path" not in kw for kw in seen)
+
+    def test_detail_dir_gives_every_measurement_its_own_file(self, tmp_path):
+        seen = []
+
+        def fake(dataset_path, model, task, **kw):
+            seen.append(kw["detail_path"])
+            return self._reply(dataset_path)
+
+        evaluate_model(self.DATASET, "google/gemma-4-E2B-it", TASKS["aime"], runs=2,
+                       workdir=tmp_path / "splits", benchmark=fake,
+                       detail_dir=tmp_path / "detail")
+        names = [q.name for q in seen]
+        assert len(seen) == 4, "two clusters x two runs"
+        assert len(names) == len(set(names)), "one file per (cluster, run)"
+        assert all(n.startswith("detail_aime_google_gemma-4-E2B-it_c") for n in names)
+        assert all(q.parent == tmp_path / "detail" for q in seen)
+
+    def test_the_name_carries_task_model_cluster_and_run(self):
+        class T:
+            name = "telemath_nothink"
+        assert (_detail_name(T, "google/gemma-4-E2B-it", "2", 4)
+                == "detail_telemath_nothink_google_gemma-4-E2B-it_c2_r4.json")
+        # a slashed model id must not turn into a subdirectory
+        assert "/" not in _detail_name(T, "Qwen/Qwen3-30B", "0", 0)
