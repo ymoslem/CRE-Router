@@ -32,6 +32,12 @@ class RouterArtifacts:
     # table. Absent from artifacts written before this was recorded, hence the
     # default, which is also the fit default.
     cost_metric: str = "tpot"
+    # Whether ``cre fit`` priced a model or a (model, cluster). Recorded for the
+    # same reason as ``cost_metric``: the two rules can select different routing
+    # tables, so a stored table is ambiguous without it. Absent from artifacts
+    # written before this was recorded, hence the default, which is the fit
+    # default and the published rule.
+    cost_conditioning: str = "model"
     stats: dict = field(default_factory=dict)
 
     def save(self, directory: str | Path) -> Path:

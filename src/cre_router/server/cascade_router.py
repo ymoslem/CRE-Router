@@ -289,6 +289,14 @@ def _escalation_order(config: dict, artifacts: RouterArtifacts) -> list[str]:
             "cannot derive the escalation ladder: the artifacts hold no stats. "
             "Run `cre fit --output <dir>` so the routing stats are stored."
         )
+    if getattr(artifacts, "cost_conditioning", "model") != "model":
+        raise ValueError(
+            "this routing table was fitted with cost_conditioning 'cluster', for "
+            "which a single escalation ladder is not well defined: the cost order "
+            "of the pool can differ between clusters, so the ladder would depend "
+            "on which cluster a query landed in. Serve a table fitted with "
+            "cost_conditioning 'model', or extend the ladder to be per cluster."
+        )
     all_models, _ = models_from_stats(artifacts.stats, artifacts.cost_metric)
     served = set(config["models"])
     pool = [m for m in all_models if m.name in served]

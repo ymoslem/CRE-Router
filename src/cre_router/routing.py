@@ -20,6 +20,12 @@ from dataclasses import dataclass, field
 #: published here it selects exactly what an exact comparison selects.
 DEFAULT_ERROR_TOL = 0.001
 
+#: How Eq. 2 prices a model. ``"model"`` is the published rule, one scalar per
+#: model; ``"cluster"`` prices each (model, cluster) pair on its own measurement.
+#: The default reproduces every published result unchanged.
+COST_CONDITIONING = ("model", "cluster")
+DEFAULT_COST_CONDITIONING = "model"
+
 #: Guard against binary floating point placing a gap that is ``tol`` by
 #: construction just above it: 0.231 - 0.230 evaluates to 1.0000000000000009e-3.
 _TOL_EPS = 1e-9
@@ -70,6 +76,18 @@ class ModelStats:
         if self.cost_metric == "tpot":
             return self.cluster_tpot_ms.get(cluster, self.tpot_ms)
         return self.cluster_e2el_ms.get(cluster, float(self.e2el_ms))
+
+    @property
+    def measured_clusters(self) -> set[str]:
+        """Clusters holding a measured per-cluster cost under the selected metric.
+
+        ``cost_for`` falls back to the pool-level scalar outside this set. That is
+        the right behaviour for reporting, but it would silently turn per-cluster
+        scoring back into per-model scoring, so anything that needs genuinely
+        per-cluster costs checks this first.
+        """
+        source = self.cluster_tpot_ms if self.cost_metric == "tpot" else self.cluster_e2el_ms
+        return set(source)
 
     def tpot_for(self, cluster: str) -> float:
         return self.cluster_tpot_ms.get(cluster, self.tpot_ms)
@@ -168,8 +186,59 @@ def normalized_costs(models: list[ModelStats]) -> dict[str, float]:
     return {m.name: (m.cost_ms - lo) / (hi - lo) for m in models}
 
 
+def cost_table(
+    models: list[ModelStats], cost_conditioning: str = DEFAULT_COST_CONDITIONING
+) -> dict[str, dict[str, float]]:
+    """Eq. 2, keyed ``[model][cluster]`` so callers never branch on the rule.
+
+    ``"model"`` is the published rule: one size-weighted scalar per model, so
+    every cluster of a given model maps to the same normalised cost. Error is
+    conditioned on the cluster but cost is not.
+
+    ``"cluster"`` prices each (model, cluster) pair on its own measurement. A
+    model that is cheap on short queries and dear on long ones is then priced
+    as such in each cluster rather than averaged across them. This is available
+    only because clustering happens offline: a per-query router cannot know a
+    query's cost before serving it, but a per-cluster router can measure it.
+
+    Both rules min-max over whatever they price, so the cheapest entry is 0 and
+    the dearest is 1. Under ``"cluster"`` that range is taken over the whole
+    (model, cluster) matrix rather than per cluster, which keeps one cost axis
+    and so one meaning for lambda across clusters.
+    """
+    if cost_conditioning not in COST_CONDITIONING:
+        raise ValueError(
+            f"unknown cost_conditioning {cost_conditioning!r}; "
+            f"expected one of {COST_CONDITIONING}"
+        )
+    clusters = clusters_of(models)
+    if cost_conditioning == "model":
+        raw = {m.name: {c: m.cost_ms for c in clusters} for m in models}
+    else:
+        missing = {m.name: sorted(set(clusters) - m.measured_clusters)
+                   for m in models if not set(clusters) <= m.measured_clusters}
+        if missing:
+            detail = "; ".join(f"{n} lacks {cs}" for n, cs in sorted(missing.items()))
+            raise ValueError(
+                "cost_conditioning 'cluster' needs a measured cost for every "
+                f"(model, cluster) pair, but {detail}. Re-measure per cluster, or "
+                "fit with cost_conditioning 'model'."
+            )
+        raw = {m.name: {c: m.cost_for(c) for c in clusters} for m in models}
+
+    values = [v for row in raw.values() for v in row.values()]
+    lo, hi = min(values), max(values)
+    if hi == lo:
+        return {name: {c: 0.0 for c in row} for name, row in raw.items()}
+    return {name: {c: (v - lo) / (hi - lo) for c, v in row.items()}
+            for name, row in raw.items()}
+
+
 def assign(
-    models: list[ModelStats], lam: float, error_tol: float = DEFAULT_ERROR_TOL
+    models: list[ModelStats],
+    lam: float,
+    error_tol: float = DEFAULT_ERROR_TOL,
+    cost_conditioning: str = DEFAULT_COST_CONDITIONING,
 ) -> dict[str, str]:
     """Eq. 1: route each cluster to argmin_m Error(m, c) + lambda * Cost_norm(m),
     breaking ties in favour of the faster model.
@@ -184,13 +253,14 @@ def assign(
     already changes, so the tolerance adds no region boundary. It can remove
     one, by merging away a region that held only a within-tolerance preference.
     """
-    costs = normalized_costs(models)
+    costs = cost_table(models, cost_conditioning)
     table = {}
     for c in clusters_of(models):
-        best = min(models, key=lambda m: (m.errors[c] + lam * costs[m.name], m.cost_ms))
+        best = min(models, key=lambda m: (m.errors[c] + lam * costs[m.name][c],
+                                          costs[m.name][c]))
         tied = [m for m in models
                 if abs(m.errors[c] - best.errors[c]) <= error_tol + _TOL_EPS]
-        table[c] = min(tied, key=lambda m: (m.cost_ms, m.errors[c], m.name)).name
+        table[c] = min(tied, key=lambda m: (costs[m.name][c], m.errors[c], m.name)).name
     return table
 
 
@@ -226,6 +296,7 @@ def selection_margins(
     lam: float,
     cluster_sizes: dict[str, float],
     error_tol: float = DEFAULT_ERROR_TOL,
+    cost_conditioning: str = DEFAULT_COST_CONDITIONING,
 ) -> dict[str, Margin]:
     """Per cluster, how decisively ``assign`` preferred the winner at ``lam``.
 
@@ -235,11 +306,12 @@ def selection_margins(
 
     ``cluster_sizes`` is the second value returned by :func:`models_from_stats`.
     """
-    costs = normalized_costs(models)
-    chosen = assign(models, lam, error_tol)
+    costs = cost_table(models, cost_conditioning)
+    chosen = assign(models, lam, error_tol, cost_conditioning)
     out: dict[str, Margin] = {}
     for c in clusters_of(models):
-        ranked = sorted(models, key=lambda m: (m.errors[c] + lam * costs[m.name], costs[m.name]))
+        ranked = sorted(models, key=lambda m: (m.errors[c] + lam * costs[m.name][c],
+                                               costs[m.name][c]))
         n = float(cluster_sizes.get(c, 0) or 0)
         # Report on whatever `assign` chose, so the two can never disagree. Where
         # the tolerance overrode the score order, `gap` comes out negative, which
@@ -251,15 +323,18 @@ def selection_margins(
             cluster=c,
             chosen=best.name,
             runner_up=second.name,
-            gap=((second.errors[c] + lam * costs[second.name])
-                 - (best.errors[c] + lam * costs[best.name])),
+            gap=((second.errors[c] + lam * costs[second.name][c])
+                 - (best.errors[c] + lam * costs[best.name][c])),
             granularity=(1.0 / n) if n else math.inf,
         )
     return out
 
 
 def dominates(
-    a: ModelStats, b: ModelStats, error_tol: float = DEFAULT_ERROR_TOL
+    a: ModelStats,
+    b: ModelStats,
+    error_tol: float = DEFAULT_ERROR_TOL,
+    cost_conditioning: str = DEFAULT_COST_CONDITIONING,
 ) -> bool:
     """True if ``a`` Pareto-dominates ``b``: no worse on cost and on every
     cluster's error, and strictly better on at least one of those.
@@ -267,39 +342,63 @@ def dominates(
     ``error_tol`` applies to both halves of that test, so an error advantage
     smaller than the tolerance neither rescues ``b`` nor, on its own, condemns
     it. Applying it to only one half would let two models dominate each other.
+
+    ``cost_conditioning`` decides what "no worse on cost" compares. Under
+    ``"model"`` it is the pool-level scalar, an average over clusters. Under
+    ``"cluster"`` it must hold in every cluster, which is the stronger
+    requirement: a model cheaper on average but dearer somewhere can still be
+    the cheapest choice there, so averaging would prune a model that the
+    per-cluster rule would select. Domination under ``"cluster"`` therefore
+    implies domination under ``"model"``, never the reverse, and the surviving
+    pool can only grow when the rule is tightened.
     """
     tol = error_tol + _TOL_EPS
-    if a.cost_ms > b.cost_ms:
-        return False
+    if cost_conditioning == "cluster":
+        cheaper = [a.cost_for(c) < b.cost_for(c) for c in b.errors]
+        if any(a.cost_for(c) > b.cost_for(c) for c in b.errors):
+            return False
+    else:
+        cheaper = [a.cost_ms < b.cost_ms]
+        if a.cost_ms > b.cost_ms:
+            return False
     if any(a.errors[c] > b.errors[c] + tol for c in b.errors):
         return False
-    return a.cost_ms < b.cost_ms or any(a.errors[c] < b.errors[c] - tol for c in b.errors)
+    return any(cheaper) or any(a.errors[c] < b.errors[c] - tol for c in b.errors)
 
 
 def pareto_prune(
-    models: list[ModelStats], error_tol: float = DEFAULT_ERROR_TOL
+    models: list[ModelStats],
+    error_tol: float = DEFAULT_ERROR_TOL,
+    cost_conditioning: str = DEFAULT_COST_CONDITIONING,
 ) -> tuple[list[ModelStats], list[ModelStats]]:
     """Split the pool into (Pareto-efficient, dominated). Dominated models can
-    never be selected by the routing score for any lambda."""
+    never be selected by the routing score for any lambda.
+
+    Tightening ``cost_conditioning`` to ``"cluster"`` can only move models from
+    dominated to efficient, never the other way. See :func:`dominates`.
+    """
     efficient, dominated = [], []
     for m in models:
-        if any(dominates(other, m, error_tol) for other in models if other.name != m.name):
+        if any(dominates(other, m, error_tol, cost_conditioning)
+               for other in models if other.name != m.name):
             dominated.append(m)
         else:
             efficient.append(m)
     return efficient, dominated
 
 
-def crossover_candidates(models: list[ModelStats]) -> list[float]:
+def crossover_candidates(
+    models: list[ModelStats], cost_conditioning: str = DEFAULT_COST_CONDITIONING
+) -> list[float]:
     """Candidate region boundaries: for each cluster and model pair, the lambda
     at which their scores are equal. For K=2 this reduces to the closed form
     of Eq. 3, lambda_c = Error(m_fast, c) - Error(m_strong, c)."""
-    costs = normalized_costs(models)
+    costs = cost_table(models, cost_conditioning)
     lams: set[float] = set()
     for c in clusters_of(models):
         for i, a in enumerate(models):
             for b in models[i + 1 :]:
-                dcost = costs[b.name] - costs[a.name]
+                dcost = costs[b.name][c] - costs[a.name][c]
                 if dcost == 0:
                     continue
                 lam = (a.errors[c] - b.errors[c]) / dcost
@@ -309,7 +408,9 @@ def crossover_candidates(models: list[ModelStats]) -> list[float]:
 
 
 def routing_regions(
-    models: list[ModelStats], error_tol: float = DEFAULT_ERROR_TOL
+    models: list[ModelStats],
+    error_tol: float = DEFAULT_ERROR_TOL,
+    cost_conditioning: str = DEFAULT_COST_CONDITIONING,
 ) -> list[Region]:
     """Sweep lambda from 0 upward and return the maximal regions with constant
     cluster-to-model assignment. Candidate boundaries that do not change the
@@ -321,12 +422,12 @@ def routing_regions(
     two within-tolerance choices no longer changes the assignment, and is
     merged away here like any other unused one.
     """
-    edges = [0.0] + crossover_candidates(models)
+    edges = [0.0] + crossover_candidates(models, cost_conditioning)
     regions: list[Region] = []
     for i, lo in enumerate(edges):
         hi = edges[i + 1] if i + 1 < len(edges) else math.inf
         probe = (lo + hi) / 2 if not math.isinf(hi) else lo + max(lo * 0.5, 0.05)
-        table = assign(models, probe, error_tol)
+        table = assign(models, probe, error_tol, cost_conditioning)
         if regions and regions[-1].assignment == table:
             regions[-1] = Region(regions[-1].lam_min, hi, table)
         else:
@@ -496,11 +597,13 @@ def eta(
     assignment: dict[str, str],
     cluster_sizes: dict[str, int | float],
     error_tol: float = DEFAULT_ERROR_TOL,
+    cost_conditioning: str = DEFAULT_COST_CONDITIONING,
 ) -> float | None:
     """Eq. 5: accuracy given up (percentage points) per millisecond of TPOT
     saved, relative to the lambda=0 baseline. Lower is better; None when the
     assignment equals the baseline."""
-    acc0, tpot0 = system_metrics(models, assign(models, 0.0, error_tol), cluster_sizes)
+    acc0, tpot0 = system_metrics(
+        models, assign(models, 0.0, error_tol, cost_conditioning), cluster_sizes)
     acc, tpot = system_metrics(models, assignment, cluster_sizes)
     if math.isclose(tpot0, tpot):
         return None
@@ -523,11 +626,12 @@ def select_lambda(
     cluster_sizes: dict[str, int | float],
     budget_ms: float,
     error_tol: float = DEFAULT_ERROR_TOL,
+    cost_conditioning: str = DEFAULT_COST_CONDITIONING,
 ) -> Selection:
     """Eq. 4: among all routing regions, pick the one with the highest training
     accuracy whose system TPOT satisfies the budget; ties favour lower TPOT."""
     best: tuple[float, float, Region] | None = None
-    for region in routing_regions(models, error_tol):
+    for region in routing_regions(models, error_tol, cost_conditioning):
         acc, tpot = system_metrics(models, region.assignment, cluster_sizes)
         if tpot > budget_ms:
             continue
@@ -536,7 +640,7 @@ def select_lambda(
     if best is None:
         fastest = min(
             system_metrics(models, r.assignment, cluster_sizes)[1]
-            for r in routing_regions(models, error_tol)
+            for r in routing_regions(models, error_tol, cost_conditioning)
         )
         metric = models[0].cost_metric.upper() if models else "cost"
         raise ValueError(
@@ -551,7 +655,7 @@ def select_lambda(
         region=region,
         accuracy=acc,
         tpot_ms=tpot,
-        eta=eta(models, region.assignment, cluster_sizes, error_tol),
+        eta=eta(models, region.assignment, cluster_sizes, error_tol, cost_conditioning),
     )
 
 
