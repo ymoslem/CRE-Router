@@ -223,6 +223,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         download_dir=args.download_dir,
         outcomes_out=outcomes_path,
         generations_out=generations_path,
+        detail_dir=args.detail_dir,
     )
 
     raw_path = Path(args.results_dir) / f"{stem}.jsonl"
@@ -354,6 +355,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--seed", type=int, default=0, help="base seed; run r uses seed+r")
     p.add_argument("--download-dir", default=None, help="vLLM model download/cache directory")
     p.add_argument("--results-dir", default="results", help="where to write raw measurements and cluster splits")
+    p.add_argument(
+        "--detail-dir",
+        default=None,
+        help="directory for the vLLM benchmark's per-request record (ttfts, itls, e2els); "
+             "off by default, and required for any per-request latency analysis",
+    )
     p.add_argument(
         "--save-generations",
         action="store_true",
