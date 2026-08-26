@@ -8,6 +8,13 @@ dataset is expected to provide the columns ``question``, ``full_output``,
 also takes a local directory of ``train*.jsonl`` and ``test*.jsonl`` written
 by ``data/prep_qe.py``, which is how a classifier for a new pool is trained.
 
+``--dataset`` plus ``--train-split`` and ``--eval-split`` is the whole interface;
+nothing here knows how a particular dataset is laid out. ``--eval-run`` is an
+optional extra for a split that repeats its questions across runs, such as
+``ymoslem/TeleQnA-router``, whose eval split holds five runs of the same 1,000
+questions where one is enough for early stopping. It is ignored where there is
+no ``run`` column.
+
 Pass ``--train-split`` and ``--eval-split`` whenever the dataset carries more
 than one pair. The defaults take the first split whose name starts with
 "train" and with "test", which identifies the right data only when there is a
@@ -38,6 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-model", default="answerdotai/ModernBERT-base")
     parser.add_argument("--train-split", default=None, help="default: first split starting with 'train'")
     parser.add_argument("--eval-split", default=None, help="default: first split starting with 'test'")
+    parser.add_argument("--eval-run", type=int, default=None,
+                        help="optional: evaluate on this run only, for a split that carries a "
+                             "'run' column. Default is every row of the split")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--max-length", type=int, default=4096, help="4096 for AIME, 512 for TeleQnA")
     parser.add_argument("--max-output-words", type=int, default=MAX_OUTPUT_WORDS)
@@ -61,6 +71,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hub-private", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     return parser
+
+
+def select_eval_run(eval_data, eval_run: int | None = None, split_name: str = "eval"):
+    """Optionally restrict an eval split to a single run.
+
+    ``eval_run`` is None by default, which evaluates on the whole split and leaves
+    the tool ignorant of how a dataset is laid out. Pass a run when a split repeats
+    its questions and the extra copies are not wanted: the eval split drives early
+    stopping and best-checkpoint selection only, so ``ymoslem/TeleQnA-router``'s
+    five runs of the same 1,000 questions add nothing there.
+
+    A split with no ``run`` column is returned unchanged, which covers the released
+    datasets that never had one and the local ``prep_qe.py`` directories.
+
+    Returns the data to evaluate on and a line describing what was selected.
+    """
+    if eval_run is None or "run" not in eval_data.column_names:
+        return eval_data, f"Eval split:  {split_name} ({len(eval_data)} examples)"
+    available = sorted(set(eval_data["run"]))
+    kept = eval_data.filter(lambda row: row["run"] == eval_run)
+    if not len(kept):
+        raise SystemExit(f"--eval-run {eval_run} matches no row in {split_name}; "
+                         f"runs present: {available}")
+    return kept, (f"Eval split:  {split_name} run {eval_run} "
+                  f"({len(kept)} of {len(eval_data)} examples, runs {available})")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -110,7 +145,15 @@ def main(argv: list[str] | None = None) -> None:
     train_split = args.train_split or next(s for s in dataset if s.startswith("train"))
     eval_split = args.eval_split or next(s for s in dataset if s.startswith("test"))
     print(f"Train split: {train_split} ({len(dataset[train_split])} examples)")
-    print(f"Eval split:  {eval_split} ({len(dataset[eval_split])} examples)")
+
+    # The eval split only drives early stopping and best-checkpoint selection, so
+    # one run per question is the convention: AIME-router and TeleMath-router bake
+    # it into the data, while TeleQnA-router ships all five runs with `run` as a
+    # column. Filtering here holds to that convention without a second copy of the
+    # dataset, and repeated runs of the same questions would in any case add
+    # nothing to a signal used only for choosing a checkpoint.
+    eval_data, message = select_eval_run(dataset[eval_split], args.eval_run, eval_split)
+    print(message)
 
     def _binary(label):
         # decision_label 2 ("continue") folds into 0 ("route"); labels may be
@@ -132,8 +175,8 @@ def main(argv: list[str] | None = None) -> None:
 
     columns = ["question", "full_output", "num_tokens", "labels"]
     splits = {}
-    for name in (train_split, eval_split):
-        split = dataset[name].map(to_binary, batched=True)
+    for name, data in ((train_split, dataset[train_split]), (eval_split, eval_data)):
+        split = data.map(to_binary, batched=True)
         split = split.remove_columns([c for c in split.column_names if c not in columns])
         splits[name] = split.map(tokenize, batched=True, remove_columns=columns)
 
