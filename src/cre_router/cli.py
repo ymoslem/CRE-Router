@@ -363,8 +363,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument(
         "--detail-dir",
         default=None,
-        help="directory for the vLLM benchmark's per-request record (ttfts, itls, e2els); "
-             "off by default, and required for any per-request latency analysis",
+        help="directory for the vLLM benchmark's per-request record (ttfts, itls, "
+             "output_lens). vLLM writes no per-request E2EL, so derive it as "
+             "ttft + sum(itls). Off by default, and required for any "
+             "per-request latency analysis",
     )
     p.add_argument(
         "--save-generations",
