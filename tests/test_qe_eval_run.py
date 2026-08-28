@@ -5,12 +5,17 @@ convention is one run per question. AIME-router and TeleMath-router bake that
 into the data; TeleQnA-router ships all five runs with `run` as a column, and
 before it was restructured the default split selection silently picked a single
 (cluster, run) slice instead, which is what this filter replaces.
+
+Needs the `qe` extra.
 """
 
 import pytest
-from datasets import Dataset
 
-from cre_router.qe.train import select_eval_run
+pytest.importorskip("datasets")
+
+from datasets import Dataset  # noqa: E402
+
+from cre_router.qe.train import select_eval_run  # noqa: E402
 
 
 def five_runs(questions=4, runs=5):
