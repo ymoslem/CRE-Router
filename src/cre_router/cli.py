@@ -212,9 +212,23 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     outcomes_path = Path(args.results_dir) / f"{stem}_outcomes.jsonl"
     generations_path = (
         Path(args.results_dir) / f"{stem}_generations.jsonl"
-        if getattr(args, "save_generations", False)
+        if getattr(args, "save_generations", True)
         else None
     )
+    # Derived from --results-dir rather than asked for separately, so a capture
+    # cannot end up with measurements in one place and no per-request record
+    # anywhere.
+    detail_dir = (
+        None if getattr(args, "no_detail", False)
+        else (args.detail_dir or str(Path(args.results_dir) / "detail"))
+    )
+    for off, what in ((generations_path is None,
+                       "generations: accuracy cannot be regraded after this run"),
+                      (detail_dir is None,
+                       "per-request detail: no per-question cost, so no paired "
+                       "test and no interval")):
+        if off:
+            print(f"WARNING: not writing {what}")
     measurements = evaluate_model(
         dataset,
         model=args.model,
@@ -228,11 +242,23 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         download_dir=args.download_dir,
         outcomes_out=outcomes_path,
         generations_out=generations_path,
-        detail_dir=args.detail_dir,
+        detail_dir=detail_dir,
     )
 
     raw_path = Path(args.results_dir) / f"{stem}.jsonl"
     save_raw_measurements(measurements, raw_path)
+
+    # Always printed, in a fixed shape, so a batch of runs can be checked with a
+    # single grep instead of by opening each log.
+    gen_n = (sum(1 for _ in open(generations_path))
+             if generations_path and Path(generations_path).exists() else 0)
+    det_n = (len(list(Path(detail_dir).glob("*.json")))
+             if detail_dir and Path(detail_dir).exists() else 0)
+    state = lambda n: f"OK ({n})" if n else "MISSING"  # noqa: E731
+    print(f"\ncapture {stem}: generations {state(gen_n)}  detail {state(det_n)}")
+    if not gen_n or not det_n:
+        print("  this capture cannot support regrading or per-request cost. "
+              "Re-run without --no-save-generations / --no-detail to keep them.")
 
     entry = model_entry(measurements)
     sizes = cluster_sizes(dataset)
@@ -360,18 +386,41 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--seed", type=int, default=0, help="base seed; run r uses seed+r")
     p.add_argument("--download-dir", default=None, help="vLLM model download/cache directory")
     p.add_argument("--results-dir", default="results", help="where to write raw measurements and cluster splits")
+    # Both default ON. Opting out is cheap to regret and expensive to undo: the
+    # run still exits 0 and still writes a stats file, but its accuracy can never
+    # be recomputed and its cost can never be resolved below the cluster mean, so
+    # recovering either means paying for the GPU time again. The files can be
+    # deleted at any point; the measurement cannot be recreated.
     p.add_argument(
         "--detail-dir",
         default=None,
         help="directory for the vLLM benchmark's per-request record (ttfts, itls, "
              "output_lens). vLLM writes no per-request E2EL, so derive it as "
-             "ttft + sum(itls). Off by default, and required for any "
-             "per-request latency analysis",
+             "ttft + sum(itls). Defaults to <results-dir>/detail; this is the "
+             "only source of per-question cost, so without it no paired test or "
+             "interval is possible",
+    )
+    p.add_argument(
+        "--no-detail",
+        action="store_true",
+        help="skip the per-request record. Metrics-only runs (smoke tests, "
+             "throughput probes) are the case for this; anything whose numbers "
+             "are reported should keep it",
     )
     p.add_argument(
         "--save-generations",
+        dest="save_generations",
         action="store_true",
-        help="also write per-question full_output + num_tokens (QE training data); off by default",
+        default=True,
+        help="write per-question full_output + num_tokens; on by default, and "
+             "the only thing that makes a score re-gradable later",
+    )
+    p.add_argument(
+        "--no-save-generations",
+        dest="save_generations",
+        action="store_false",
+        help="skip the per-question text. The accuracy of such a run can never "
+             "be recomputed, only trusted as graded on the day",
     )
     p.set_defaults(func=cmd_evaluate)
 
