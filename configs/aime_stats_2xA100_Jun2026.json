@@ -1,0 +1,42 @@
+{
+  "_note": "SUBMITTED basis, kept so the preprint stays reproducible. Do not use it for the reported numbers. Per-cluster training statistics for the AIME 1983-2023 pool (paper Table 'aime_training'). Cluster sizes are the AIME train split cluster counts. Reproduce lambda* with: cre fit --stats configs/aime_stats.json --budget 20",
+  "cluster_sizes": {
+    "0": 194,
+    "1": 405,
+    "2": 322
+  },
+  "error_tol": 0.001,
+  "models": {
+    "VibeThinker-1.5B": {
+      "errors": {
+        "0": 0.13,
+        "1": 0.083,
+        "2": 0.182
+      },
+      "cluster_tpot_ms": {
+        "0": 9.282,
+        "1": 9.348,
+        "2": 8.825
+      },
+      "vllm_version": "0.17.0"
+    },
+    "Qwen3-30B-A3B": {
+      "errors": {
+        "0": 0.063,
+        "1": 0.031,
+        "2": 0.083
+      },
+      "cluster_tpot_ms": {
+        "0": 23.419,
+        "1": 24.07,
+        "2": 26.62
+      },
+      "vllm_version": "0.17.0"
+    }
+  },
+  "basis": "2 x A100 SXM 80 GB, concurrency 32, the June 2026 preprint",
+  "measured": "2026-03-08 to 2026-03-10",
+  "vllm_version": [
+    "0.17.0"
+  ]
+}

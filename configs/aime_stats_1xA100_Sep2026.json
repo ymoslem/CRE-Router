@@ -1,0 +1,39 @@
+{
+  "_note": "Per-cluster training statistics for the AIME 1983-2023 pool, measured on 1 x A100 at concurrency 32 under vLLM 0.19.0, the basis the paper reports. Five runs, errors regraded from full_output. Reproduce lambda* with: cre fit --stats configs/aime_stats.json --budget 30",
+  "basis": "1 x A100 SXM 80 GB, concurrency 32",
+  "vllm_version": "0.19.0",
+  "cluster_sizes": {
+    "0": 194,
+    "1": 405,
+    "2": 322
+  },
+  "error_tol": 0.001,
+  "models": {
+    "VibeThinker-1.5B": {
+      "errors": {
+        "0": 0.133,
+        "1": 0.0919,
+        "2": 0.2
+      },
+      "cluster_tpot_ms": {
+        "0": 11.052,
+        "1": 11.685,
+        "2": 12.795
+      },
+      "vllm_version": "0.19.0"
+    },
+    "Qwen3-30B-A3B": {
+      "errors": {
+        "0": 0.0588,
+        "1": 0.0311,
+        "2": 0.0969
+      },
+      "cluster_tpot_ms": {
+        "0": 35.732,
+        "1": 36.838,
+        "2": 41.948
+      },
+      "vllm_version": "0.19.0"
+    }
+  }
+}

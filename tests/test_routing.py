@@ -39,16 +39,34 @@ V = "VibeThinker-1.5B"
 Q = "Qwen3-30B-A3B"
 
 
+# Every config names its basis, so a fixture has to as well. The assertions in
+# this file were written against the June 2026 preprint's 2 x A100 measurements
+# and stay pinned to them; the reported 1 x A100 basis is a different pool with
+# different crossovers and different pruning, covered by TestReportedBasis.
+SUBMITTED = {"aime": "aime_stats_2xA100_Jun2026.json",
+             "teleqna": "teleqna_stats_2xA100_Jun2026.json"}
+REPORTED = {"aime": "aime_stats_1xA100_Sep2026.json",
+            "teleqna": "teleqna_stats_1xA100_Sep2026.json"}
+
+
 @pytest.fixture()
 def aime():
-    stats = json.loads((CONFIGS / "aime_stats.json").read_text())
-    return models_from_stats(stats)
+    return models_from_stats(json.loads((CONFIGS / SUBMITTED["aime"]).read_text()))
 
 
 @pytest.fixture()
 def teleqna():
-    stats = json.loads((CONFIGS / "teleqna_stats.json").read_text())
-    return models_from_stats(stats)
+    return models_from_stats(json.loads((CONFIGS / SUBMITTED["teleqna"]).read_text()))
+
+
+@pytest.fixture()
+def aime_1x():
+    return models_from_stats(json.loads((CONFIGS / REPORTED["aime"]).read_text()))
+
+
+@pytest.fixture()
+def teleqna_1x():
+    return models_from_stats(json.loads((CONFIGS / REPORTED["teleqna"]).read_text()))
 
 
 class TestNormalizedCosts:
@@ -204,20 +222,20 @@ class TestCascadeSystemMetrics:
     composed values are 9.75 / 23.65 ms; the paper reports 9.7 / 23.8 ms."""
 
     def test_aime_stage1plus2_latency(self):
-        models, assignment, sizes, escalations = _load_cascade("aime_cascade_test.json")
+        models, assignment, sizes, escalations = _load_cascade("aime_cascade_test_2xA100_Jun2026.json")
         tpot, e2el = cascade_system_metrics(models, assignment, sizes, escalations)
         assert tpot == pytest.approx(9.7, abs=0.1)   # paper Table aime_test
         assert e2el == pytest.approx(156300, rel=1e-3)
 
     def test_teleqna_stage1plus2_latency(self):
-        models, assignment, sizes, escalations = _load_cascade("teleqna_cascade_test.json")
+        models, assignment, sizes, escalations = _load_cascade("teleqna_cascade_test_2xA100_Jun2026.json")
         tpot, e2el = cascade_system_metrics(models, assignment, sizes, escalations)
         assert tpot == pytest.approx(23.8, abs=0.2)  # paper Table teleqna_test
         assert e2el == pytest.approx(1127, rel=1e-3)
 
     def test_no_escalation_matches_stage1(self):
         """With no escalations the cascade collapses to Stage 1 TPOT exactly."""
-        models, assignment, sizes, _ = _load_cascade("teleqna_cascade_test.json")
+        models, assignment, sizes, _ = _load_cascade("teleqna_cascade_test_2xA100_Jun2026.json")
         _, stage1_tpot = system_metrics(models, assignment, sizes)
         tpot, _ = cascade_system_metrics(models, assignment, sizes, escalations={})
         assert tpot == pytest.approx(stage1_tpot)
@@ -342,10 +360,10 @@ class TestCascadeSystemAccuracy:
         return cascade_system_accuracy(models, assignment, sizes, cascade_accuracy)
 
     def test_aime_config_reproduces_884(self):
-        assert self._cascade_acc_from_config("aime_cascade_test.json") == pytest.approx(0.884, abs=0.001)
+        assert self._cascade_acc_from_config("aime_cascade_test_2xA100_Jun2026.json") == pytest.approx(0.884, abs=0.001)
 
     def test_teleqna_config_reproduces_743(self):
-        assert self._cascade_acc_from_config("teleqna_cascade_test.json") == pytest.approx(0.743, abs=0.001)
+        assert self._cascade_acc_from_config("teleqna_cascade_test_2xA100_Jun2026.json") == pytest.approx(0.743, abs=0.001)
 
 
 # ---------------------------------------------------------------------------
@@ -575,7 +593,7 @@ class TestErrorTolerance:
         """The published claim: on every pool in this repo the tolerance selects
         exactly what an exact comparison selects."""
         root = Path(__file__).resolve().parents[1]
-        for name in ("aime_stats.json", "teleqna_stats.json"):
+        for name in (*SUBMITTED.values(), *REPORTED.values()):
             stats = json.loads((root / "configs" / name).read_text())
             assert stats["error_tol"] == DEFAULT_ERROR_TOL, name
             for metric in ("tpot", "e2el"):
@@ -589,3 +607,55 @@ class TestErrorTolerance:
                 assert ([(r.lam_min, r.assignment) for r in routing_regions(models, 0.0)]
                         == [(r.lam_min, r.assignment)
                             for r in routing_regions(models, DEFAULT_ERROR_TOL)]), (name, metric)
+
+
+class TestReportedBasis:
+    """The 1 x A100 measurements the paper reports, which are a different pool.
+
+    Same models, same questions, same answers: only the serving configuration
+    changes, and it changes enough that a test written for one basis says
+    nothing about the other. Pinning both is the point -- it is what stops a
+    config being swapped underneath a claim.
+    """
+
+    def test_aime_crossovers_are_the_error_gaps(self, aime_1x):
+        models, _ = aime_1x
+        # with two models min-max sends the pair to {0, 1}, so each crossover is
+        # the error gap and the cost term cancels
+        by = {m.name: m for m in models}
+        for cluster, expected in (("1", 0.0607), ("0", 0.0742), ("2", 0.1031)):
+            gap = by[V].errors[cluster] - by[Q].errors[cluster]
+            assert gap == pytest.approx(expected, abs=5e-4), cluster
+
+    def test_aime_budget_30ms_selects_the_reported_routing(self, aime_1x):
+        models, sizes = aime_1x
+        chosen = None
+        for region in routing_regions(models):
+            _, tpot = system_metrics(models, region.assignment, sizes)
+            if tpot <= 30.0:
+                chosen = region
+                break
+        assert chosen is not None
+        assert chosen.assignment == {"0": Q, "1": V, "2": Q}
+        assert chosen.lam_min == pytest.approx(0.0607, abs=5e-4)
+
+    def test_nothing_is_pruned_on_one_card(self, teleqna_1x):
+        """The sharpest difference between the two bases.
+
+        On two cards Gemma4-E2B and Gemma4-E4B are dominated and the sweep has
+        three regions. On one card the whole pool is on the frontier and it has
+        six, so a config without its basis in the name cannot be read safely.
+        """
+        models, _ = teleqna_1x
+        kept, dropped = pareto_prune(models)
+        assert [m.name for m in dropped] == []
+        assert len(kept) == 4
+        assert len(routing_regions(models)) == 6
+
+    def test_the_two_bases_really_do_disagree(self, teleqna, teleqna_1x):
+        submitted, _ = teleqna
+        reported, _ = teleqna_1x
+        _, dropped_2x = pareto_prune(submitted)
+        _, dropped_1x = pareto_prune(reported)
+        assert {m.name for m in dropped_2x} == {"Gemma4-E2B", "Gemma4-E4B"}
+        assert not dropped_1x

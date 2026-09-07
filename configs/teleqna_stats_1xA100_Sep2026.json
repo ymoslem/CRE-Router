@@ -1,0 +1,56 @@
+{
+  "_note": "Per-cluster training statistics for the TeleQnA four-model pool, measured on 1 x A100 at concurrency 32 under vLLM 0.19.0, the basis the paper reports. NOTHING is Pareto-dominated here and the sweep has six regions; on the submitted 2 x A100 configuration Gemma4-E2B and Gemma4-E4B were pruned and it had three. Reproduce lambda* with: cre fit --stats configs/teleqna_stats.json --budget 20",
+  "basis": "1 x A100 SXM 80 GB, concurrency 32",
+  "vllm_version": "0.19.0",
+  "cluster_sizes": {
+    "0": 5211,
+    "1": 3789
+  },
+  "error_tol": 0.001,
+  "models": {
+    "Qwen3-4B": {
+      "errors": {
+        "0": 0.2993,
+        "1": 0.3284
+      },
+      "cluster_tpot_ms": {
+        "0": 10.773,
+        "1": 10.588
+      },
+      "vllm_version": "0.19.0"
+    },
+    "Gemma4-E2B": {
+      "errors": {
+        "0": 0.3377,
+        "1": 0.3926
+      },
+      "cluster_tpot_ms": {
+        "0": 8.298,
+        "1": 8.277
+      },
+      "vllm_version": "0.19.0"
+    },
+    "Gemma4-E4B": {
+      "errors": {
+        "0": 0.2946,
+        "1": 0.3341
+      },
+      "cluster_tpot_ms": {
+        "0": 11.77,
+        "1": 11.856
+      },
+      "vllm_version": "0.19.0"
+    },
+    "Gemma4-26B": {
+      "errors": {
+        "0": 0.2302,
+        "1": 0.2552
+      },
+      "cluster_tpot_ms": {
+        "0": 30.283,
+        "1": 29.911
+      },
+      "vllm_version": "0.19.0"
+    }
+  }
+}

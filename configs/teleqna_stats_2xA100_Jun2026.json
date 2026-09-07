@@ -1,0 +1,60 @@
+{
+  "_note": "SUBMITTED basis, kept so the preprint stays reproducible. Do not use it for the reported numbers. Per-cluster training statistics for the TeleQnA four-model pool (paper Table 'teleqna_training'). Pareto pruning removes Gemma4-E2B and Gemma4-E4B. Training-split cluster sizes (9,000 queries): C0=5211, C1=3789. Reproduce lambda* with: cre fit --stats configs/teleqna_stats.json --budget 20",
+  "cluster_sizes": {
+    "0": 5211,
+    "1": 3789
+  },
+  "error_tol": 0.001,
+  "models": {
+    "Qwen3-4B": {
+      "errors": {
+        "0": 0.297,
+        "1": 0.329
+      },
+      "cluster_tpot_ms": {
+        "0": 15.593,
+        "1": 15.121
+      },
+      "vllm_version": "0.17.0"
+    },
+    "Gemma4-E2B": {
+      "errors": {
+        "0": 0.339,
+        "1": 0.39
+      },
+      "cluster_tpot_ms": {
+        "0": 20.447,
+        "1": 20.227
+      },
+      "vllm_version": "0.19.0"
+    },
+    "Gemma4-26B": {
+      "errors": {
+        "0": 0.231,
+        "1": 0.254
+      },
+      "cluster_tpot_ms": {
+        "0": 26.124,
+        "1": 25.801
+      },
+      "vllm_version": "0.19.0"
+    },
+    "Gemma4-E4B": {
+      "errors": {
+        "0": 0.293,
+        "1": 0.332
+      },
+      "cluster_tpot_ms": {
+        "0": 27.17,
+        "1": 26.484
+      },
+      "vllm_version": "0.19.0"
+    }
+  },
+  "basis": "2 x A100 SXM 80 GB, concurrency 32, the June 2026 preprint",
+  "measured": "2026-04-11 to 2026-04-13",
+  "vllm_version": [
+    "0.17.0",
+    "0.19.0"
+  ]
+}

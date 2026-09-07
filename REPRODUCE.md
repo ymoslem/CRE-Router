@@ -35,15 +35,35 @@ checked in under [`configs/`](configs), so the Stage 1 routing tables and
 budgeted $\lambda^*$ selection reproduce directly:
 
 ```bash
-cre fit --stats configs/aime_stats.json --budget 20
-cre fit --stats configs/teleqna_stats.json --budget 20
+cre fit --stats configs/aime_stats_1xA100_Sep2026.json --budget 30
+cre fit --stats configs/teleqna_stats_1xA100_Sep2026.json --budget 20
 ```
 
 This prints the Pareto analysis, the full $\lambda$ sweep (routing regions), and
 the budget-feasible $\lambda^*$ selection. Expected values are pinned as tests in
-[`tests/test_routing.py`](tests/test_routing.py), e.g. the AIME crossovers
-$\lambda$ = 0.067 / 0.052 / 0.099, $\lambda^*$ = 0.06 at B = 20 ms, and the TeleQnA
-Pareto pruning of the Gemma-E2B and Gemma-E4B models.
+[`tests/test_routing.py`](tests/test_routing.py): AIME crossovers
+$\lambda$ = 0.061 / 0.074 / 0.103 with $\lambda^*$ = 0.061 at B = 30 ms, and a
+TeleQnA pool where **nothing is Pareto-dominated** and the sweep has six regions.
+
+**Every config names the configuration that produced it, and there is no
+basis-less default.** Cost is a property of the serving setup, so a config
+without its basis in the name is a number waiting to be misread:
+
+| config | basis |
+| --- | --- |
+| `*_1xA100_Sep2026.json` | 1 x A100 at concurrency 32, vLLM 0.19.0 -- what the paper reports |
+| `*_2xA100_Jun2026.json` | 2 x A100, vLLM 0.17.0, the June 2026 preprint, kept reproducible |
+
+Every name is basis plus measurement month, so two files never differ only in
+hardware when they also differ in date and serving stack. The suffixes go away
+once a single basis remains.
+
+The two bases are genuinely different pools rather than the same pool priced
+twice. On two cards Gemma4-E2B and Gemma4-E4B are dominated and the TeleQnA
+sweep has three regions; on one card nothing is dominated and it has six. The
+archived configs record the vLLM version **per model**, because the submitted
+TeleQnA pool served Qwen3-4B-Instruct under 0.17.0 and the three Gemmas under
+0.19.0.
 
 The training-set cluster sizes used for the system-level accuracy and TPOT
 come from the paper's clustering (AIME train 194 / 405 / 322; TeleQnA train
@@ -56,8 +76,8 @@ per-cluster measurements plus the measured QE escalation counts, checked in
 under [`configs/`](configs):
 
 ```bash
-cre cascade --stats configs/aime_cascade_test.json
-cre cascade --stats configs/teleqna_cascade_test.json
+cre cascade --stats configs/aime_cascade_test_2xA100_Jun2026.json
+cre cascade --stats configs/teleqna_cascade_test_2xA100_Jun2026.json
 ```
 
 Each escalated query is charged both passes: for TPOT, per delivered token
@@ -104,15 +124,15 @@ cre cluster --input data/aime_train.jsonl --embeddings-field embeddings --output
 vllm serve WeiboAI/VibeThinker-1.5B --port 8000 --max-model-len 42000
 cre evaluate --task aime --model WeiboAI/VibeThinker-1.5B \
     --dataset data/aime_train.jsonl --artifacts artifacts/aime \
-    --stats-out configs/aime_stats.json --runs 5
+    --stats-out configs/aime_stats_1xA100_Sep2026.json --runs 5
 
 vllm serve Qwen/Qwen3-30B-A3B-Thinking-2507-FP8 --port 8000 --max-model-len 42000
 cre evaluate --task aime --model Qwen/Qwen3-30B-A3B-Thinking-2507-FP8 \
     --dataset data/aime_train.jsonl --artifacts artifacts/aime \
-    --stats-out configs/aime_stats.json --runs 5
+    --stats-out configs/aime_stats_1xA100_Sep2026.json --runs 5
 
 # 3. compute the routing table and lambda*
-cre fit --stats configs/aime_stats.json --budget 20 --output artifacts/aime
+cre fit --stats configs/aime_stats_1xA100_Sep2026.json --budget 30 --output artifacts/aime
 ```
 
 `cre evaluate` runs vLLM's benchmark per cluster, averages over `--runs`, and

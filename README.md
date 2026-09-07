@@ -248,12 +248,17 @@ answer parser and sampling preset. A benchmark may also ship variants for a
 model's thinking and non-thinking modes, differing in sampling and in whether the
 prompt is pre-rendered.
 
-| task | sampling | max tokens | prompt in the dataset |
-| --- | --- | --- | --- |
-| `aime`, `telemath` | 0.6 / 0.95 | 40,960 | raw, templated at serve time |
-| `telemath_nothink` | 0.7 / 0.8 | 16,384 | raw, templated at serve time |
-| `teleqna` | 0.7 / 0.8 | 1,024 | raw, templated at serve time |
-| `telemath_gemma4` | 0.6 / 0.95 | 40,960 | pre-rendered, served verbatim |
+`max output tokens` is fixed by the task, not by the caller, so every capture of
+a benchmark is capped identically however it was launched. What the caller does
+choose is the served context (`--max-model-len`), which must leave room for the
+prompt on top of this cap or requests are rejected on length.
+
+| task | temperature | top-p | max output tokens | prompt in the dataset |
+| --- | --- | --- | --- | --- |
+| `aime`, `telemath` | 0.6 | 0.95 | 40,960 | raw, templated at serve time |
+| `telemath_nothink` | 0.7 | 0.8 | 16,384 | raw, templated at serve time |
+| `teleqna` | 0.7 | 0.8 | 1,024 | raw, templated at serve time |
+| `telemath_gemma4` | 0.6 | 0.95 | 40,960 | pre-rendered, served verbatim |
 
 Gemma 4's thinking switch is a chat-template keyword argument, and vLLM's
 benchmark loader does not forward it, so those prompts are rendered ahead of

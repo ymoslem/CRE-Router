@@ -142,7 +142,7 @@ class TestPaperCascadeReconstruction:
         per_run = [(a + r * si) / N for r, a, si in zip(routed, accepted_correct, s)]
         mean = sum(per_run) / len(per_run)
         assert mean == pytest.approx(0.742, abs=0.002)   # paper Table teleqna_test 0.743
-        cfg = json.loads((CONFIGS / "teleqna_cascade_test.json").read_text())
+        cfg = json.loads((CONFIGS / "teleqna_cascade_test_2xA100_Jun2026.json").read_text())
         assert cfg["cascade_accuracy"]["0"] == pytest.approx(mean, abs=0.005)
 
     def test_aime_c1_reconstructs_0_96(self):
@@ -158,5 +158,5 @@ class TestPaperCascadeReconstruction:
                 strong.append(True)                   # strong right on the escalated hard query
         acc = cluster_cascade_accuracy(weak, strong, escalate)
         assert acc == pytest.approx(0.96)             # paper Table aime_test 0.96
-        cfg = json.loads((CONFIGS / "aime_cascade_test.json").read_text())
+        cfg = json.loads((CONFIGS / "aime_cascade_test_2xA100_Jun2026.json").read_text())
         assert cfg["cascade_accuracy"]["1"] == pytest.approx(acc)
