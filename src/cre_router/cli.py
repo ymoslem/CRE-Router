@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -188,6 +189,20 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     )
 
     task = TASKS[args.task]
+    # The cap belongs to the task so every capture of a benchmark is capped
+    # alike. One case defeats that: a model whose whole context is smaller than
+    # the cap plus the prompt cannot be served at all, and Qwen3-8B on AIME is
+    # exactly that, 40,960 tokens of context against a 40,960-token cap. Lower
+    # it only for such a model, and only downwards, so a capture can never claim
+    # more room than the task allows.
+    if args.max_output_tokens is not None:
+        if args.max_output_tokens > task.max_tokens:
+            raise SystemExit(
+                f"--max-output-tokens {args.max_output_tokens} exceeds the "
+                f"{args.task} cap of {task.max_tokens}. The cap is the task's "
+                f"definition and may only be lowered."
+            )
+        task = replace(task, max_tokens=args.max_output_tokens)
 
     dataset = _read_jsonl(Path(args.dataset))
     if args.limit is not None:
@@ -260,7 +275,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         print("  this capture cannot support regrading or per-request cost. "
               "Re-run without --no-save-generations / --no-detail to keep them.")
 
-    entry = model_entry(measurements)
+    entry = model_entry(measurements, max_output_tokens=task.max_tokens)
     sizes = cluster_sizes(dataset)
     merge_model_into_stats(args.stats_out, args.model, entry, sizes)
 
@@ -383,6 +398,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--runs", type=int, default=5, help="inference repetitions to average")
     p.add_argument("--limit", type=int, default=None, help="only evaluate the first N queries (for quick smoke tests)")
     p.add_argument("--concurrency", type=int, default=32, help="vLLM benchmark max concurrency")
+    p.add_argument(
+        "--max-output-tokens", type=int, default=None,
+        help="lower the task's output cap for this run, for a model whose context "
+             "cannot hold the task cap plus the prompt. May only be lowered. The "
+             "stats file records the cap, since captures at different caps are "
+             "not comparable")
     p.add_argument("--seed", type=int, default=0, help="base seed; run r uses seed+r")
     p.add_argument("--download-dir", default=None, help="vLLM model download/cache directory")
     p.add_argument("--results-dir", default="results", help="where to write raw measurements and cluster splits")
