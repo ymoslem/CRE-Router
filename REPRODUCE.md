@@ -28,6 +28,25 @@ The stages map onto the `cre` commands:
 
 Deploying both stages together is `cre serve`.
 
+## Installation (from source)
+
+Everything below runs from a checkout, not from a wheel. `pip install
+cre-router` ships the library alone: the configs, datasets and this document
+live in the repository and in the source distribution, so the commands here
+resolve their `configs/...` paths only if you have one of those.
+
+```bash
+git clone https://github.com/ymoslem/CRE-Router.git
+cd CRE-Router
+pip install -e ".[qe,serve,eval]"
+```
+
+The `[eval]` extra pulls vLLM, which the GPU sections need; the no-GPU sections
+below need only the base install. To pin the exact environment behind the
+reported numbers rather than current releases, see
+[requirements-paper.txt](requirements-paper.txt) — read the header first, it is
+provenance rather than something to install over your working environment.
+
 ## Routing tables and $\lambda^*$ (no GPU)
 
 The per-cluster error rates and TPOT measured on the training corpora are
