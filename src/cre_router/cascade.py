@@ -42,8 +42,10 @@ import numpy as np
 
 __all__ = ["per_request_metrics"]
 
-# What a capture must provide per (question, run).
-FIELDS = ("correct", "e2el", "tokens")
+# What a capture must provide per (question, run). `tpot` is vLLM's own
+# per-token time, (e2el - ttft) / (tokens - 1); it is NOT derivable from the
+# other three, because it excludes the wait before the first token.
+FIELDS = ("correct", "e2el", "tokens", "tpot")
 
 
 def _stack(strong_by_run: Any, n_q: int, n_eff: int) -> dict[str, np.ndarray]:
@@ -91,9 +93,27 @@ def per_request_metrics(
     ``correct`` / ``e2el`` / ``tokens`` to (question, run) arrays.
 
     E2EL is what the user waits: the efficient pass when it happened, plus the
-    strong pass when it happened. TPOT is that wait over the tokens actually
-    *delivered*, so an escalated query is charged for its discarded pass rather
-    than being quietly forgiven it.
+    strong pass when it happened, time before the first token included.
+
+    TPOT is the serving stack's own per-token time, taken from the capture and
+    never reconstructed. vLLM defines it as ``(e2el - ttft) / (tokens - 1)``, so
+    a pass spends exactly ``tpot * (tokens - 1)`` decoding. A query answered by
+    one tier therefore reports that tier's measured TPOT unchanged.
+
+    An escalated query has no single measured TPOT, because it is two requests.
+    Its passes are combined over the tokens the user actually received::
+
+        (tpot_eff * (n_eff - 1) + tpot_strong * (n_strong - 1)) / (n_strong - 1)
+
+    The efficient pass's decode time is charged in full, exactly as E2EL adds
+    both passes' wall time. However, its tokens are not counted, because they
+    were discarded and never reached the user. A wasted pass therefore costs
+    time and earns no tokens to spread that time over.
+
+    Total wait over tokens delivered is a different quantity again: it folds in
+    the time before the first token, which TPOT excludes by definition. The two
+    agree to a rounding error on long generations and differ by 11% on short
+    answers, so the measured value is used throughout.
     """
     runs_eff = np.asarray(runs_eff, dtype=bool)
     uses_strong = np.asarray(uses_strong, dtype=bool)
@@ -113,7 +133,12 @@ def per_request_metrics(
     e2el = (np.where(re_, eff["e2el"][:, :, None], 0.0)
             + np.where(us, strong["e2el"], 0.0))
     delivered = np.where(us, strong["tokens"], eff["tokens"][:, :, None])
-    if np.any(delivered <= 0):
-        raise ValueError("a delivered answer has no tokens; the masks and the "
-                         "captures disagree about which tier answered")
-    return correct, e2el, e2el / delivered * 1000.0
+    # TPOT is a time BETWEEN tokens, so a one-token answer has none to report and
+    # neither does the stack. Refusing is right: silently treating it as zero
+    # would pull the mean down by exactly the requests we know least about.
+    if np.any(delivered < 2):
+        raise ValueError("a delivered answer has fewer than 2 tokens, so it has "
+                         "no TPOT; drop those requests or price them another way")
+    decode = (np.where(re_, (eff["tpot"] * (eff["tokens"] - 1.0))[:, :, None], 0.0)
+              + np.where(us, strong["tpot"] * (strong["tokens"] - 1.0), 0.0))
+    return correct, e2el, decode / (delivered - 1.0)

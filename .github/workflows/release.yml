@@ -37,9 +37,8 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
 
-  # A tag is not a release. Without this the package reaches PyPI while the
-  # repository still shows the previous version as latest, which is what
-  # happened for v0.3.0 and had to be fixed by hand.
+  # Actual repository release. Without this the package reaches PyPI while the
+  # repository still shows the previous version as latest.
   github-release:
     needs: publish
     runs-on: ubuntu-latest
