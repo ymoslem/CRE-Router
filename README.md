@@ -2,6 +2,7 @@
 
 [![arXiv](https://img.shields.io/badge/arXiv-2606.27457-b31b1b.svg?labelColor=3C3F42)](https://arxiv.org/abs/2606.27457)
 [![PyPI](https://img.shields.io/pypi/v/cre-router.svg?labelColor=3C3F42)](https://pypi.org/project/cre-router/)
+[![release](https://img.shields.io/github/v/release/ymoslem/CRE-Router?labelColor=3C3F42)](https://github.com/ymoslem/CRE-Router/releases/latest)
 [![tests](https://github.com/ymoslem/CRE-Router/actions/workflows/tests.yml/badge.svg)](https://github.com/ymoslem/CRE-Router/actions/workflows/tests.yml)
 
 Implementation of the paper, [**Cluster, Route, Escalate: Cascaded Framework for Cost-Aware LLM Serving**](https://arxiv.org/abs/2606.27457).
