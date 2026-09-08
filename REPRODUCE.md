@@ -92,7 +92,12 @@ come from the paper's clustering (AIME train 194 / 405 / 322; TeleQnA train
 
 The combined Stage 1+2 system TPOT and E2EL are composed from the test-split
 per-cluster measurements plus the measured QE escalation counts, checked in
-under [`configs/`](configs):
+under [`configs/`](configs).
+
+**These reproduce the June 2026 preprint, not the reported Stage 1 above.** Only
+the 2 x A100 cascade configs exist so far; the reported Stage 2 is priced on
+escalation batches that are still being measured, and lands as
+`*_cascade_test_1xA100_Sep2026.json`.
 
 ```bash
 cre cascade --stats configs/aime_cascade_test_2xA100_Jun2026.json
