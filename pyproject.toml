@@ -71,6 +71,7 @@ include = [
   ".github/workflows",
   ".gitignore",
   "configs",
+  "data/build_stats_configs.py",
   "data/download.py",
   "data/prep_gemma4_thinking.py",
   "data/prep_qe.py",
