@@ -466,14 +466,25 @@ def aggregate_runs(measurements: list[RunMeasurement]) -> dict[str, dict[str, fl
     return agg
 
 
-def model_entry(measurements: list[RunMeasurement]) -> dict:
+def model_entry(
+    measurements: list[RunMeasurement], max_output_tokens: int | None = None
+) -> dict:
     """The per-model block for a stats file: per-cluster error and TPOT, plus any
-    optional metric that every run reported."""
+    optional metric that every run reported.
+
+    ``max_output_tokens`` is the cap the run was served under. It is normally the
+    task's, but a model whose context cannot hold the task cap plus the prompt is
+    served lower, and two captures at different caps are not comparable on either
+    cost or accuracy. Recording it puts that on the file rather than in someone's
+    memory of how the job was launched.
+    """
     agg = aggregate_runs(measurements)
     entry = {
         "errors": {c: round(agg[c]["error"], 6) for c in agg},
         "cluster_tpot_ms": {c: round(agg[c]["tpot_ms"], 6) for c in agg},
     }
+    if max_output_tokens is not None:
+        entry["max_output_tokens"] = int(max_output_tokens)
     for metric in OPTIONAL_METRICS:
         present = {c: agg[c][metric] for c in agg if metric in agg[c]}
         if len(present) == len(agg):

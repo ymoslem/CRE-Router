@@ -254,6 +254,13 @@ a benchmark is capped identically however it was launched. What the caller does
 choose is the served context (`--max-model-len`), which must leave room for the
 prompt on top of this cap or requests are rejected on length.
 
+One model can defeat that: if its whole context is smaller than the task cap plus
+the prompt, it cannot be served at all. Qwen3-8B on `aime` is exactly this, a
+40,960-token context against a 40,960-token cap, leaving nothing for the question.
+`--max-output-tokens` lowers the cap for such a run, and only lowers it. The stats
+entry then records `max_output_tokens`, because a capture taken at a lower cap is
+not comparable with the rest of the pool on either cost or accuracy.
+
 | task | temperature | top-p | max output tokens | prompt in the dataset |
 | --- | --- | --- | --- | --- |
 | `aime`, `telemath` | 0.6 | 0.95 | 40,960 | raw, templated at serve time |
