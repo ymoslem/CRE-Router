@@ -392,6 +392,34 @@ class RunMeasurement:
     truncated_frac: float | None = None
 
 
+class EmptyCaptureError(RuntimeError):
+    """Every request failed, so the capture holds no generations.
+
+    A run whose requests are all rejected still finishes: vLLM's benchmark
+    reports each failure, the harness averages them, and the result is a
+    well-formed stats file reading error 1.0 at 0.0 ms. Nothing about it looks
+    malformed, and a capture like that has twice been composed into a slide
+    before anyone noticed. Refusing to return it is the only reliable point to
+    catch it, because everything downstream sees plausible numbers.
+
+    The usual cause is a context that cannot hold the task's output cap plus the
+    prompt, which vLLM rejects per request as "maximum context length".
+    """
+
+
+def assert_capture_generated_something(measurements: list["RunMeasurement"]) -> None:
+    """Refuse a capture in which no request produced a single token."""
+    tokens = [m.mean_output_tokens for m in measurements
+              if m.mean_output_tokens is not None]
+    if measurements and tokens and max(tokens) <= 0:
+        raise EmptyCaptureError(
+            f"every one of the {len(measurements)} (cluster, run) benchmarks "
+            f"produced 0 output tokens, so no request succeeded. The stats file "
+            f"would read error 1.0 at 0.0 ms and look valid. Check the serve log "
+            f"for 'maximum context length': the served context must exceed the "
+            f"task's output cap plus the prompt.")
+
+
 def optional_metrics(
     result: dict, num_prompts: int, max_output_len: int | None = None
 ) -> dict[str, float]:
@@ -838,4 +866,5 @@ def evaluate_model(
         with gen_path.open("w") as f:
             for g in generations:
                 f.write(json.dumps(g, ensure_ascii=False) + "\n")
+    assert_capture_generated_something(measurements)
     return measurements
