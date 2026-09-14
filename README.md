@@ -42,23 +42,6 @@ than a millisecond in TPOT while differing several-fold in E2EL, because
 whenever the pool mixes thinking and non-thinking members, or verbose and terse
 ones.
 
-### Near-equal error rates
-
-A cluster of `n` questions cannot resolve accuracy any finer than `1/n`, so a
-model chosen on a smaller error difference than that is chosen on noise. Stage 1
-therefore treats two models whose per-cluster error rates differ by no more than
-`--error-tol` (default `0.001`, one tenth of a percentage point) as
-indistinguishable on accuracy, and picks the cheaper of them. The same tolerance
-applies to Pareto pruning, on both halves of the domination test.
-
-It is a robustness guard rather than a tuned parameter. On every pool in this
-repository it selects exactly what an exact comparison selects: the smallest
-non-zero error gap that any sweep actually rests on is 0.0038, nearly four times
-the tolerance. Set it from the stats file with `"error_tol"`, or per run with
-`--error-tol`; pass `--error-tol 0` for an exact comparison.
-
-<p align="center"><img src="img/system.svg" alt="Two-stage cascaded routing system" width="760"></p>
-
 ## Pipeline
 
 The full workflow is driven by the `cre` CLI, one command per step:
@@ -174,6 +157,23 @@ the per-question outputs Stage 2 trains on, and is worth passing even if you onl
 want Stage 1 today. [REPRODUCE.md](REPRODUCE.md) carries the full worked sequence,
 including the QE classifier stages.
 
+### Near-equal error rates
+
+A cluster of `n` questions cannot resolve accuracy any finer than `1/n`, so a
+model chosen on a smaller error difference than that is chosen on noise. Stage 1
+therefore treats two models whose per-cluster error rates differ by no more than
+`--error-tol` (default `0.001`, one tenth of a percentage point) as
+indistinguishable on accuracy, and picks the cheaper of them. The same tolerance
+applies to Pareto pruning, on both halves of the domination test.
+
+It is a robustness guard rather than a tuned parameter. On every pool in this
+repository it selects exactly what an exact comparison selects: the smallest
+non-zero error gap that any sweep actually rests on is 0.0038, nearly four times
+the tolerance. Set it from the stats file with `"error_tol"`, or per run with
+`--error-tol`; pass `--error-tol 0` for an exact comparison.
+
+<p align="center"><img src="img/system.svg" alt="Two-stage cascaded routing system" width="760"></p>
+
 ## Quickstart: serve CRE-Router (GPU required)
 
 This walks through standing up the live router end to end, using the paper's
@@ -253,6 +253,13 @@ prompt is pre-rendered.
 a benchmark is capped identically however it was launched. What the caller does
 choose is the served context (`--max-model-len`), which must leave room for the
 prompt on top of this cap or requests are rejected on length.
+
+One model can defeat that: if its whole context is smaller than the task cap plus
+the prompt, it cannot be served at all. Qwen3-8B on `aime` is exactly this, a
+40,960-token context against a 40,960-token cap, leaving nothing for the question.
+`--max-output-tokens` lowers the cap for such a run, and only lowers it. The stats
+entry then records `max_output_tokens`, because a capture taken at a lower cap is
+not comparable with the rest of the pool on either cost or accuracy.
 
 | task | temperature | top-p | max output tokens | prompt in the dataset |
 | --- | --- | --- | --- | --- |
