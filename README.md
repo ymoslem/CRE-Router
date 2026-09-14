@@ -39,8 +39,10 @@ The two agree while pool members emit similar numbers of tokens, and diverge as
 soon as they do not. A reasoning model and a non-reasoning one can differ by less
 than a millisecond in TPOT while differing several-fold in E2EL, because
 `E2EL = TTFT + TPOT * L` and TPOT divides the output length `L` out. Use E2EL
-whenever the pool mixes thinking and non-thinking members, or verbose and terse
+whenever the pool mixes thinking and non-thinking members, or verbose and brief
 ones.
+
+<p align="center"><img src="img/system.svg" alt="Two-stage cascaded routing system" width="760"></p>
 
 ## Pipeline
 
@@ -171,8 +173,6 @@ repository it selects exactly what an exact comparison selects: the smallest
 non-zero error gap that any sweep actually rests on is 0.0038, nearly four times
 the tolerance. Set it from the stats file with `"error_tol"`, or per run with
 `--error-tol`; pass `--error-tol 0` for an exact comparison.
-
-<p align="center"><img src="img/system.svg" alt="Two-stage cascaded routing system" width="760"></p>
 
 ## Quickstart: serve CRE-Router (GPU required)
 
