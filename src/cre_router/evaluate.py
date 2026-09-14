@@ -275,6 +275,24 @@ TASKS: dict[str, Task] = {
         min_p=0.0,
         max_tokens=1024,
     ),
+    # TeleQnA served to a reasoning model. Same questions, same parser and the
+    # same multiple-choice answer; only the room to reach it differs. The
+    # `teleqna` cap of 1,024 tokens is set by what the non-thinking pool needs
+    # (measured mean output 36 tokens, truncated fraction 0.0000 to 0.0002), and
+    # a thinking model exhausts it inside its own reasoning and returns nothing
+    # to parse. This arm gives it the 40,960 the AIME and TeleMath arms use, and
+    # the thinking sampling Qwen recommends. The cap is non-binding for the
+    # non-thinking pool either way, so raising it for one model does not change
+    # what the others were measured under.
+    "teleqna_think": Task(
+        name="teleqna_think",
+        parse=parse_teleqna_answer,
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        min_p=0.0,
+        max_tokens=40960,
+    ),
     # TeleMath: telecom mathematical problems with numerical (float) answers,
     # scored by relative tolerance rather than exact match. Two arms, since the
     # pool mixes thinking and non-thinking models and each has its own
