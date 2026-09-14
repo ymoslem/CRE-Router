@@ -72,6 +72,24 @@ class TestGemma4TaskWiring:
                 assert not task.pre_rendered, name
 
 
+class TestTeleQnAThinkArm:
+    def test_same_parser_and_answer_space_as_teleqna(self):
+        assert TASKS["teleqna_think"].parse is TASKS["teleqna"].parse
+        assert TASKS["teleqna_think"].match is TASKS["teleqna"].match
+
+    def test_gives_a_thinking_model_room_the_1024_cap_does_not(self):
+        # The whole reason the arm exists: a reasoning model spends more than
+        # `teleqna`'s cap before it answers. Pinned to the width AIME uses so
+        # the two benchmarks price a thinking model the same way.
+        assert TASKS["teleqna"].max_tokens == 1024
+        assert TASKS["teleqna_think"].max_tokens == TASKS["aime"].max_tokens
+
+    def test_uses_the_thinking_sampling(self):
+        for field in ("temperature", "top_p", "top_k", "min_p"):
+            assert getattr(TASKS["teleqna_think"], field) == getattr(
+                TASKS["aime"], field), field
+
+
 class TestAnswersMatch:
     def test_int_string_equivalence(self):
         assert answers_match(42, "42")
