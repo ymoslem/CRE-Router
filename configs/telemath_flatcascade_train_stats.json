@@ -1,0 +1,66 @@
+{
+  "_note": "Two-model flat-cascade ablation pool, TRAIN split, whole-dataset serving basis. Errors regraded from full_output; cost is the uniform whole-dataset value per model. Built by data/build_flatcascade_train_stats.py. Basis: 1 x A100, vLLM 0.19.0, concurrency 32, Sep 2026, the same serving configuration the paper reports; see ref/results/serving_stack.tsv for the per-capture audit.",
+  "cluster_sizes": {
+    "0": 98,
+    "1": 98,
+    "2": 51,
+    "3": 52
+  },
+  "error_tol": 0.001,
+  "models": {
+    "E2B-nothink": {
+      "errors": {
+        "0": 0.6612244897959184,
+        "1": 0.3795918367346939,
+        "2": 0.7803921568627451,
+        "3": 0.6461538461538462
+      },
+      "cluster_e2el_ms": {
+        "0": 13671.569505,
+        "1": 13671.569505,
+        "2": 13671.569505,
+        "3": 13671.569505
+      },
+      "cluster_tpot_ms": {
+        "0": 8.377305,
+        "1": 8.377305,
+        "2": 8.377305,
+        "3": 8.377305
+      },
+      "cluster_output_tokens": {
+        "0": 1612.058194,
+        "1": 1612.058194,
+        "2": 1612.058194,
+        "3": 1612.058194
+      }
+    },
+    "26B-nothink": {
+      "errors": {
+        "0": 0.35714285714285715,
+        "1": 0.2571428571428571,
+        "2": 0.39215686274509803,
+        "3": 0.24615384615384617
+      },
+      "cluster_e2el_ms": {
+        "0": 34314.201616,
+        "1": 34314.201616,
+        "2": 34314.201616,
+        "3": 34314.201616
+      },
+      "cluster_tpot_ms": {
+        "0": 27.09668,
+        "1": 27.09668,
+        "2": 27.09668,
+        "3": 27.09668
+      },
+      "cluster_output_tokens": {
+        "0": 1313.26087,
+        "1": 1313.26087,
+        "2": 1313.26087,
+        "3": 1313.26087
+      }
+    }
+  },
+  "basis": "1xA100_Sep2026",
+  "vllm_version": "0.19.0"
+}
