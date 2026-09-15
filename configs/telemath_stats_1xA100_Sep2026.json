@@ -1,0 +1,201 @@
+{
+ "_note": "Per-cluster TRAINING statistics for the nine-model TeleMath pool, measured on 1 x A100 at concurrency 32 under vLLM 0.19.0, k = 4 clusters over the 299-question train split. This is the only pool in the package whose cost ordering CHANGES between clusters, 5 of 36 model pairs under TPOT and 3 of 36 under E2EL, which is the precondition a per-cluster cost rule needs to change a routing at all; on the AIME and TeleQnA pools both rules return the same routing. Fit it with `cre fit --stats configs/telemath_stats_1xA100_Sep2026.json --budget 25 --cost-metric tpot` or `--cost-metric e2el --budget 25000`, and add `--cost-conditioning cluster` to price cost per (model, cluster) instead of per model.",
+ "cluster_sizes": {
+  "0": 98,
+  "1": 98,
+  "2": 51,
+  "3": 52
+ },
+ "error_tol": 0.001,
+ "models": {
+  "Gemma4-26B-A4B": {
+   "errors": {
+    "0": 0.371429,
+    "1": 0.271429,
+    "2": 0.352941,
+    "3": 0.3
+   },
+   "cluster_tpot_ms": {
+    "0": 25.113912,
+    "1": 24.938721,
+    "2": 24.037456,
+    "3": 24.282456
+   },
+   "cluster_e2el_ms": {
+    "0": 32159.201347,
+    "1": 28749.871242,
+    "2": 34890.01666,
+    "3": 19979.566627
+   },
+   "vllm_version": "0.19.0"
+  },
+  "Gemma4-26B-A4B-think": {
+   "errors": {
+    "0": 0.330612,
+    "1": 0.289796,
+    "2": 0.329412,
+    "3": 0.184615
+   },
+   "cluster_tpot_ms": {
+    "0": 35.718554,
+    "1": 33.175104,
+    "2": 30.847787,
+    "3": 31.222127
+   },
+   "cluster_e2el_ms": {
+    "0": 510905.613783,
+    "1": 349029.387915,
+    "2": 484547.390635,
+    "3": 392421.558231
+   },
+   "vllm_version": "0.19.0"
+  },
+  "Gemma4-E2B": {
+   "errors": {
+    "0": 0.659184,
+    "1": 0.353061,
+    "2": 0.784314,
+    "3": 0.634615
+   },
+   "cluster_tpot_ms": {
+    "0": 7.757749,
+    "1": 7.53097,
+    "2": 7.617801,
+    "3": 7.242649
+   },
+   "cluster_e2el_ms": {
+    "0": 12789.37878,
+    "1": 10680.324602,
+    "2": 16349.695926,
+    "3": 8576.602787
+   },
+   "vllm_version": "0.19.0"
+  },
+  "Gemma4-E2B-think": {
+   "errors": {
+    "0": 0.665306,
+    "1": 0.373469,
+    "2": 0.752941,
+    "3": 0.557692
+   },
+   "cluster_tpot_ms": {
+    "0": 8.380678,
+    "1": 8.022884,
+    "2": 8.090005,
+    "3": 7.560497
+   },
+   "cluster_e2el_ms": {
+    "0": 24170.952156,
+    "1": 20603.34563,
+    "2": 31230.708132,
+    "3": 15894.774118
+   },
+   "vllm_version": "0.19.0"
+  },
+  "Gemma4-E4B": {
+   "errors": {
+    "0": 0.55102,
+    "1": 0.340816,
+    "2": 0.713725,
+    "3": 0.523077
+   },
+   "cluster_tpot_ms": {
+    "0": 12.061868,
+    "1": 11.631294,
+    "2": 11.877956,
+    "3": 11.30812
+   },
+   "cluster_e2el_ms": {
+    "0": 19203.045943,
+    "1": 14137.632417,
+    "2": 24165.799917,
+    "3": 11880.453007
+   },
+   "vllm_version": "0.19.0"
+  },
+  "Gemma4-E4B-think": {
+   "errors": {
+    "0": 0.532653,
+    "1": 0.334694,
+    "2": 0.686275,
+    "3": 0.438462
+   },
+   "cluster_tpot_ms": {
+    "0": 12.806172,
+    "1": 12.34365,
+    "2": 12.526423,
+    "3": 11.744952
+   },
+   "cluster_e2el_ms": {
+    "0": 34534.289986,
+    "1": 26858.197631,
+    "2": 42747.153119,
+    "3": 23011.111349
+   },
+   "vllm_version": "0.19.0"
+  },
+  "Qwen3-4B-Instruct-2507": {
+   "errors": {
+    "0": 0.528571,
+    "1": 0.344898,
+    "2": 0.596078,
+    "3": 0.45
+   },
+   "cluster_tpot_ms": {
+    "0": 14.286837,
+    "1": 11.718702,
+    "2": 12.591019,
+    "3": 10.164074
+   },
+   "cluster_e2el_ms": {
+    "0": 45280.904411,
+    "1": 25515.200229,
+    "2": 46184.768562,
+    "3": 25307.415347
+   },
+   "vllm_version": "0.19.0"
+  },
+  "Qwen3-4B-Thinking-2507": {
+   "errors": {
+    "0": 0.467347,
+    "1": 0.261224,
+    "2": 0.482353,
+    "3": 0.434615
+   },
+   "cluster_tpot_ms": {
+    "0": 27.36074,
+    "1": 23.203559,
+    "2": 27.244493,
+    "3": 18.709376
+   },
+   "cluster_e2el_ms": {
+    "0": 290853.666908,
+    "1": 175999.599465,
+    "2": 380547.531018,
+    "3": 160734.162355
+   },
+   "vllm_version": "0.19.0"
+  },
+  "Qwen3-30B-A3B-Thinking-2507": {
+   "errors": {
+    "0": 0.308163,
+    "1": 0.210204,
+    "2": 0.352941,
+    "3": 0.296154
+   },
+   "cluster_tpot_ms": {
+    "0": 26.420927,
+    "1": 23.707936,
+    "2": 25.575232,
+    "3": 21.77383
+   },
+   "cluster_e2el_ms": {
+    "0": 200507.025389,
+    "1": 117561.731433,
+    "2": 262664.067319,
+    "3": 127347.076772
+   },
+   "vllm_version": "0.19.0"
+  }
+ }
+}
