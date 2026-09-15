@@ -72,8 +72,20 @@ def n_stage_metrics(
             raise ValueError(f"stage {i + 2} has {len(per_run)} run grids, "
                              f"expected {n_first}")
 
-    n_later = np.shape(later[0][0]["correct"])[1] if later else n_first
-    shape = (n_q, n_first, n_later)
+    # A stage the fit never reaches has no grid for that run, and at a loose
+    # enough budget it is never reached for ANY run: the cascade degenerates to
+    # its earlier stages, which price it exactly. So the later-run axis is sized
+    # from the first grid that exists rather than from `later[0][0]`, which is
+    # None in exactly that case.
+    grids = [g for per_run in later for g in per_run if g is not None]
+    n_later = np.shape(grids[0]["correct"])[1] if grids else n_first
+    for g in grids:
+        for f in FIELDS:
+            if f not in g:
+                raise ValueError(f"a later-stage grid is missing {f!r}")
+            if np.shape(g[f]) != (n_q, n_later):
+                raise ValueError(f"a later-stage field {f!r} has shape "
+                                 f"{np.shape(g[f])}, expected {(n_q, n_later)}")
 
     def bcast(a):
         return np.repeat(np.asarray(a, dtype=float)[:, :, None], n_later, axis=2)
