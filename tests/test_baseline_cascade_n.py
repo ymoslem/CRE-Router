@@ -67,3 +67,52 @@ class TestRejectsBadInput:
         del eff["tokens"]
         with pytest.raises(ValueError, match="missing 'tokens'"):
             n_stage_metrics(np.zeros((NQ, NR), dtype=int), eff, [])
+
+
+class TestAStageTheFitNeverReaches:
+    """At a loose budget the optimiser accepts every stage 1 answer.
+
+    Then no query escalates, no batch was ever submitted, and every later-stage
+    grid is None. That is the cascade degenerating to its first model, which the
+    earlier stages price exactly, not a missing measurement. Sizing the run axis
+    from `later[0][0]` raised TypeError on exactly this input, so the B = 35 s
+    FrugalGPT rows could not be computed at all.
+    """
+
+    def test_all_runs_empty_reduces_to_stage_one(self):
+        rng = np.random.default_rng(3)
+        eff = grids(rng)
+        correct, e2el, tpot = n_stage_metrics(
+            np.zeros((NQ, NR), dtype=int), eff, [[None] * NR])
+        for got, want in ((correct, eff["correct"]), (e2el, eff["e2el"]),
+                          (tpot, eff["tpot"])):
+            assert np.allclose(got, np.repeat(want[:, :, None], NR, axis=2))
+
+    def test_every_stage_empty_at_depth_three(self):
+        rng = np.random.default_rng(4)
+        eff = grids(rng)
+        _, e2el, _ = n_stage_metrics(np.zeros((NQ, NR), dtype=int), eff,
+                                     [[None] * NR, [None] * NR])
+        assert np.allclose(e2el, np.repeat(eff["e2el"][:, :, None], NR, axis=2))
+
+    def test_some_runs_empty_still_charges_the_runs_that_ran(self):
+        rng = np.random.default_rng(5)
+        eff = grids(rng)
+        strong = [grids(rng) if r % 2 else None for r in range(NR)]
+        answered = np.ones((NQ, NR), dtype=int)
+        # A run with no grid cannot have escalated, so say so on that axis.
+        answered[:, [r for r in range(NR) if strong[r] is None]] = 0
+        _, e2el, _ = n_stage_metrics(answered, eff, [strong])
+        for r in range(NR):
+            if strong[r] is None:
+                assert np.allclose(e2el[:, r, :], eff["e2el"][:, r, None])
+            else:
+                assert np.all(e2el[:, r, :] > eff["e2el"][:, r, None])
+
+    def test_a_later_grid_of_the_wrong_shape_is_refused(self):
+        rng = np.random.default_rng(6)
+        eff = grids(rng)
+        bad = grids(rng)
+        bad["tokens"] = bad["tokens"][:-1]
+        with pytest.raises(ValueError, match="later-stage field 'tokens'"):
+            n_stage_metrics(np.ones((NQ, NR), dtype=int), eff, [[bad] * NR])
