@@ -10,8 +10,8 @@ to cite the work. For the tool itself (install, CLI, serving) see the
 The framework is a two-stage cascade. **Stage 1 (clustering-based routing)**
 embeds each query, assigns it to a semantic cluster, and routes the cluster to
 the model that minimizes a cost-adjusted score `Error + lambda * Cost` under a
-latency (TPOT) budget; this produces the routing table and the budgeted
-$\lambda^*$. **Stage 2 (quality-estimation cascade)** inspects an efficient model's
+latency budget, measured per output token (TPOT) or per request (E2EL); this
+produces the routing table and the budgeted $\lambda^*$. **Stage 2 (quality-estimation cascade)** inspects an efficient model's
 output with a lightweight ModernBERT classifier and escalates low-quality
 answers to a stronger model.
 
@@ -56,13 +56,55 @@ budgeted $\lambda^*$ selection reproduce directly:
 ```bash
 cre fit --stats configs/aime_stats_1xA100_Sep2026.json --budget 30
 cre fit --stats configs/teleqna_stats_1xA100_Sep2026.json --budget 20
+cre fit --stats configs/telemath_stats_1xA100_Sep2026.json --budget 20
+cre fit --stats configs/telemath_stats_1xA100_Sep2026.json --budget 25
+cre fit --stats configs/telemath_stats_1xA100_Sep2026.json --budget 25000 --cost-metric e2el
 ```
 
 This prints the Pareto analysis, the full $\lambda$ sweep (routing regions), and
-the budget-feasible $\lambda^*$ selection. Expected values are pinned as tests in
-[`tests/test_routing.py`](tests/test_routing.py): AIME crossovers
-$\lambda$ = 0.061 / 0.074 / 0.103 with $\lambda^*$ = 0.061 at B = 30 ms, and a
-TeleQnA pool where **nothing is Pareto-dominated** and the sweep has six regions.
+the budget-feasible $\lambda^*$ selection. The budget is in the units of the cost
+term: milliseconds per token for TPOT (the default), milliseconds per request
+for E2EL. Expected values are pinned as tests in
+[`tests/test_routing.py`](tests/test_routing.py):
+
+- **AIME**: crossovers $\lambda$ = 0.061 / 0.074 / 0.103, with $\lambda^*$ = 0.061
+  at B = 30 ms.
+- **TeleQnA**: **nothing is Pareto-dominated** and the sweep has six regions.
+- **TeleMath**, nine models over k = 4 clusters, clusters written C0 to C3:
+
+  | budget | C0 | C1 | C2 | C3 | train accuracy |
+  | --- | --- | --- | --- | --- | --- |
+  | TPOT 20 ms | Qwen3-30B-think | Gemma4-E2B | Qwen3-30B-think | Gemma4-E4B-think | 64.7% |
+  | TPOT 25 ms | Qwen3-30B-think | Gemma4-E2B | Qwen3-30B-think | Gemma4-26B-think | 69.1% |
+  | E2EL 25 s | Gemma4-26B | Gemma4-E2B | Gemma4-26B | Gemma4-26B | 65.0% |
+
+  Under TPOT, Gemma4-26B (non-thinking) is Pareto-dominated and pruned.
+
+  On 2 x A100 (`telemath_stats_2xA100_Sep2026.json`) the same budgets buy
+  stronger models. Under TPOT the most accurate routing, Qwen3-30B-think on C0
+  and C1 and Gemma4-26B-think on C2 and C3, already costs 17.3 ms, so 20 and
+  25 ms both select it at 74.0%. Under E2EL, 25 s selects Gemma4-26B for every
+  cluster, at 66.0%:
+
+  ```bash
+  cre fit --stats configs/telemath_stats_2xA100_Sep2026.json --budget 20
+  cre fit --stats configs/telemath_stats_2xA100_Sep2026.json --budget 25000 --cost-metric e2el
+  ```
+
+**Cost can be conditioned on the cluster.** By default Eq. 2 prices a model by
+one cost for the whole pool (`--cost-conditioning model`, the published rule).
+`--cost-conditioning cluster` prices each (model, cluster) pair by its own
+measurement instead. It can change a routing only when a model's cost ranks
+differently from one cluster to another. TeleMath's mix of thinking and
+non-thinking models has such pairs; on the AIME and TeleQnA pools both rules
+return the same routing at the budgets above, and so does the TeleMath pool
+on two cards. On TeleMath at TPOT 20 ms it
+selects Qwen3-30B-think / Gemma4-E2B / Gemma4-26B /
+Qwen3-30B-think at 67.2% train accuracy:
+
+```bash
+cre fit --stats configs/telemath_stats_1xA100_Sep2026.json --budget 20 --cost-conditioning cluster
+```
 
 **Every config names the configuration that produced it, and there is no
 basis-less default.** Cost is a property of the serving setup, so a config
@@ -70,8 +112,13 @@ without its basis in the name is a number waiting to be misread:
 
 | config | basis |
 | --- | --- |
-| `*_1xA100_Sep2026.json` | 1 x A100 at concurrency 32, vLLM 0.19.0 -- what the paper reports |
-| `*_2xA100_Jun2026.json` | 2 x A100, vLLM 0.17.0, the June 2026 preprint, kept reproducible |
+| `*_1xA100_Sep2026.json` | 1 x A100 at concurrency 32, vLLM 0.19.0 |
+| `*_2xA100_Sep2026.json` | 2 x A100 (tensor parallel 2) at concurrency 32, vLLM 0.19.0; TeleMath so far |
+| `*_2xA100_Jun2026.json` | 2 x A100, the June 2026 preprint, kept reproducible |
+
+The two Sep 2026 bases differ only in card count, so comparing them isolates
+what the hardware does to a routing. Each is fitted on its own costs: a budget
+priced on one card is not the same budget on two.
 
 Every name is basis plus measurement month, so two files never differ only in
 hardware when they also differ in date and serving stack. The suffixes go away
@@ -86,7 +133,7 @@ TeleQnA pool served Qwen3-4B-Instruct under 0.17.0 and the three Gemmas under
 
 The training-set cluster sizes used for the system-level accuracy and TPOT
 come from the paper's clustering (AIME train 194 / 405 / 322; TeleQnA train
-5,211 / 3,789).
+5,211 / 3,789; TeleMath train 98 / 98 / 51 / 52, the same on both card counts).
 
 ### Stage 1+2 cascade latency (no GPU)
 
@@ -130,6 +177,49 @@ Note: The embeddings were computed with the all-MiniLM-L6-v2 model on Apple Sili
 
 
 
+### Preparing TeleMath
+
+TeleMath ([`netop/TeleMath`](https://huggingface.co/datasets/netop/TeleMath)) is
+a gated dataset of 500 telecom mathematics problems with numerical answers, and
+it ships no train split. `data/prep_telemath.py` creates one, stratified by
+category and pinned by seed; its defaults reproduce the paper's 299 / 201
+train / test split exactly:
+
+```bash
+HF_TOKEN=<your token> python data/prep_telemath.py --out data/telemath
+```
+
+The questions are not redistributed here, so there is no released clustered
+TeleMath dataset. Cluster the training split with k = 4, which gives the
+98 / 98 / 51 / 52 train sizes above:
+
+```bash
+cre cluster --input data/telemath_train.jsonl --k 4 --output artifacts/telemath
+```
+
+As with AIME, re-embedding on different hardware can move a few questions
+between clusters.
+
+The pool mixes thinking and non-thinking models, served under three tasks:
+
+| task | models | `--max-model-len` |
+| --- | --- | --- |
+| `telemath` | Qwen3-30B-A3B-Thinking, Qwen3-4B-Thinking | 45000 |
+| `telemath_nothink` | Gemma4-E2B, Gemma4-E4B, Gemma4-26B, Qwen3-4B-Instruct (thinking off) | 32768 |
+| `telemath_gemma4` | Gemma4-E2B, Gemma4-E4B, Gemma4-26B (thinking on) | 45000 |
+
+Gemma 4's thinking switch is a chat-template argument, so `telemath_gemma4`
+serves prompts rendered in advance with it switched on, once per Gemma model and
+split. The task passes them to the model verbatim:
+
+```bash
+python data/prep_gemma4_thinking.py --in data/telemath_train.jsonl \
+    --out data/telemath_train_gemma --model google/gemma-4-26B-A4B-it
+```
+
+The TeleMath quality-estimation data and classifiers are not yet on the Hub.
+They follow the recipe below with `--max-length 4096` and learning rate 2e-5.
+
 ## Regenerating the stats from scratch (GPU)
 
 To rebuild the stats files, fit centroids and then measure each model per
@@ -163,6 +253,19 @@ cre fit --stats configs/aime_stats_1xA100_Sep2026.json --budget 30 --output arti
 saves the raw per-(cluster, run) measurements under `results/` so every number
 in the stats traces back to a benchmark run. Sampling follows the paper's
 Appendix A (AIME thinking-mode 0.6 / 0.95 / 20; TeleQnA 0.7 / 0.8 / 20).
+
+TeleMath follows the same three steps with its own task per model (table
+above), for example:
+
+```bash
+vllm serve Qwen/Qwen3-30B-A3B-Thinking-2507-FP8 --port 8000 --max-model-len 45000
+cre evaluate --task telemath --model Qwen/Qwen3-30B-A3B-Thinking-2507-FP8 \
+    --dataset data/telemath_train.jsonl --artifacts artifacts/telemath \
+    --stats-out configs/telemath_stats.json --runs 5
+```
+
+`cre evaluate` keys each entry by the served model ID, whereas the shipped
+config uses short names such as `Gemma4-E2B`; the routing is the same.
 
 ## QE classifier (Stage 2)
 
@@ -232,8 +335,10 @@ Fetch any split as JSONL with `python data/download.py --dataset <id>`.
 
 Package versions are pinned in
 [`requirements-paper.txt`](requirements-paper.txt). The reported numbers were
-measured on 2x A100 SXM 80 GB under Python 3.11 with 32 concurrent requests,
-averaged over 5 runs. TPOT is hardware- and version-specific and will shift on
+measured on 1 x A100 and 2 x A100 SXM 80 GB under vLLM 0.19.0 and Python 3.11
+with 32 concurrent requests, averaged over 5 runs. The June 2026 preprint was
+also measured on 2 x A100; its `*_2xA100_Jun2026.json` configs record the serving
+stack of each model. TPOT is hardware- and version-specific and will shift on
 newer vLLM releases or different hardware (e.g. H100 with full W8A8 FP8
 support), which can also change the selected $\lambda^*$. Efficient ModernBERT
 training additionally used `flash-attn==2.8.3`.

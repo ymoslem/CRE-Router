@@ -659,3 +659,71 @@ class TestReportedBasis:
         _, dropped_1x = pareto_prune(reported)
         assert {m.name for m in dropped_2x} == {"Gemma4-E2B", "Gemma4-E4B"}
         assert not dropped_1x
+
+
+class TestTeleMath:
+    """The TeleMath operating points `REPRODUCE.md` quotes, on the reported basis.
+
+    Nine models, k = 4 clusters, 1 x A100 at concurrency 32 under vLLM 0.19.0.
+    Every value below is printed by `cre fit` on the shipped config, and each
+    budget is the one the paper reports under that cost term.
+    """
+
+    CONFIG = "telemath_stats_1xA100_Sep2026.json"
+    Q30 = "Qwen3-30B-A3B-Thinking-2507"
+    E2B = "Gemma4-E2B"
+    G26 = "Gemma4-26B-A4B"
+
+    def _fit(self, metric, budget, rule="model"):
+        stats = json.loads((CONFIGS / self.CONFIG).read_text())
+        models, sizes = models_from_stats(stats, metric)
+        return select_lambda(models, sizes, budget, error_tol_from_stats(stats), rule)
+
+    @pytest.mark.parametrize("metric, budget, rule, route, acc", [
+        ("tpot", 20.0, "model", (Q30, E2B, Q30, "Gemma4-E4B-think"), 0.647),
+        ("tpot", 25.0, "model", (Q30, E2B, Q30, "Gemma4-26B-A4B-think"), 0.691),
+        ("e2el", 25000.0, "model", (G26, E2B, G26, G26), 0.650),
+        ("tpot", 20.0, "cluster", (Q30, E2B, G26, Q30), 0.672),
+    ])
+    def test_reported_operating_points(self, metric, budget, rule, route, acc):
+        sel = self._fit(metric, budget, rule)
+        assert tuple(sel.region.assignment[c] for c in "0123") == route
+        assert sel.accuracy == pytest.approx(acc, abs=5e-4)
+
+    def test_cluster_sizes(self):
+        stats = json.loads((CONFIGS / self.CONFIG).read_text())
+        assert stats["cluster_sizes"] == {"0": 98, "1": 98, "2": 51, "3": 52}
+
+    def test_one_model_is_dominated_under_tpot(self):
+        stats = json.loads((CONFIGS / self.CONFIG).read_text())
+        models, _ = models_from_stats(stats, "tpot")
+        _, dropped = pareto_prune(models)
+        assert [m.name for m in dropped] == [self.G26]
+
+
+class TestTeleMathTwoCards(TestTeleMath):
+    """The same pool on 2 x A100, tensor parallel 2, fitted on its own costs.
+
+    At the one-card budgets the two-card pool can afford far stronger models:
+    under TPOT the most accurate routing already costs less than 20 ms, and under
+    E2EL the budget selects Gemma4-26B for every cluster.
+    """
+
+    CONFIG = "telemath_stats_2xA100_Sep2026.json"
+    G26T = "Gemma4-26B-A4B-think"
+
+    @pytest.mark.parametrize("metric, budget, rule, route, acc", [
+        ("tpot", 20.0, "model", (TestTeleMath.Q30, TestTeleMath.Q30,
+                                 "Gemma4-26B-A4B-think", "Gemma4-26B-A4B-think"), 0.740),
+        ("tpot", 20.0, "cluster", (TestTeleMath.Q30, TestTeleMath.Q30,
+                                   "Gemma4-26B-A4B-think", "Gemma4-26B-A4B-think"), 0.740),
+        ("e2el", 25000.0, "model", (TestTeleMath.G26,) * 4, 0.660),
+    ])
+    def test_reported_operating_points(self, metric, budget, rule, route, acc):
+        super().test_reported_operating_points(metric, budget, rule, route, acc)
+
+    def test_one_model_is_dominated_under_tpot(self):
+        stats = json.loads((CONFIGS / self.CONFIG).read_text())
+        models, _ = models_from_stats(stats, "tpot")
+        _, dropped = pareto_prune(models)
+        assert [m.name for m in dropped] == ["Gemma4-E4B"]
