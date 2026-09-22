@@ -1,9 +1,10 @@
-"""FrugalGPT's generation scorer: is this answer good enough to return?
+"""Implementation of Chen et al. (2024), the FrugalGPT generation scorer.
 
-The scoring function ``g(q, a)`` of Chen, Zaharia and Zou (TMLR 2024), following
-their released ``src/FrugalGPT/scoring.py`` rather than the paper's description
-of it. The paper calls it "a simple regression model"; the code builds a
-two-class sequence classifier, trains on integer labels, and reads the score off
+The scoring function ``g(q, a)`` of Chen, Zaharia and Zou (TMLR 2024), which
+decides whether an answer is good enough to return. Taken from their released
+``src/FrugalGPT/scoring.py`` rather than from the paper's description of it. The
+paper calls it "a simple regression model"; the code builds a two-class sequence
+classifier, trains on integer labels, and reads the score off
 ``softmax(logits)[1]``. That accept probability is what the cascade thresholds.
 
 One scorer is trained per pool model, because a stage judges the answers of the

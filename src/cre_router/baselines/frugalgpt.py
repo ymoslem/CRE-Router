@@ -1,8 +1,9 @@
-"""FrugalGPT's LLM cascade: a learned model list with learned per-stage thresholds.
+"""Implementation of Chen et al. (2024), the FrugalGPT cascade.
 
 Chen, Zaharia and Zou, *FrugalGPT: How to Use Large Language Models While
 Reducing Cost and Improving Performance*, TMLR 2024. Reference implementation at
-https://github.com/stanford-futuredata/FrugalGPT (Apache-2.0).
+https://github.com/stanford-futuredata/FrugalGPT (Apache-2.0). A learned model
+list with learned per-stage thresholds.
 
 A query goes to the first model in an ordered list ``L``. A scorer rates that
 answer; if the score clears that stage's threshold the answer is returned,
