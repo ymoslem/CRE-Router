@@ -1,0 +1,17 @@
+{
+ "name": "TeleMath, no-clustering ablation (k = 1), TPOT routing, B = 20 ms, Stage 1 + 2",
+ "_basis": "TeleMath test split, 201 questions served as ONE cluster (k = 1), 1 x A100 80 GB, vLLM 0.19.0, concurrency 32, 5 runs of the Stage 1 model and of every escalation batch",
+ "tau": 0.5,
+ "runs": 5,
+ "_probs": "accept probabilities: ymoslem/cluster-route-escalate-scores, config telemath_qe, source_file telemath/k1abl/probs/k1abl_probs_instruct.jsonl",
+ "tiers": {
+  "Q4-Instruct": "k1abl_ws_instruct"
+ },
+ "assign": {
+  "0": "Q4-Instruct"
+ },
+ "gated": {
+  "0": "k1abl_esc_instruct_to_q30b"
+ },
+ "strong": "Q30B"
+}

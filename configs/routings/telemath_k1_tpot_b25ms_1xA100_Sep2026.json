@@ -1,0 +1,14 @@
+{
+ "name": "TeleMath, no-clustering ablation (k = 1), TPOT routing, B = 25 ms: the budget buys Qwen3-30B for every question and there is nothing cheaper to escalate from, so this is always-Q30B",
+ "_basis": "TeleMath test split, 201 questions served whole as one batch, 1 x A100 80 GB, vLLM 0.19.0, concurrency 32, 5 runs",
+ "tau": 0.5,
+ "runs": 5,
+ "tiers": {
+  "Q30B": "tmws_q30b"
+ },
+ "assign": {
+  "0": "Q30B"
+ },
+ "gated": {},
+ "strong": null
+}
