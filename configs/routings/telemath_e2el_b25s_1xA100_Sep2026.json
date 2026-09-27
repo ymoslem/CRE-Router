@@ -1,0 +1,21 @@
+{
+ "name": "TeleMath, E2EL routing, B = 25 s, Stage 1 + 2",
+ "_basis": "TeleMath test split, 201 questions, 1 x A100 80 GB, vLLM 0.19.0, concurrency 32, 5 runs of every tier and of every escalation batch",
+ "_probs": "accept probabilities: ymoslem/cluster-route-escalate-scores, config telemath_qe, source_file telemath/qe_probs_v3.jsonl",
+ "tau": 0.5,
+ "runs": 5,
+ "tiers": {
+  "26B": "pbd_26b",
+  "E2B": "pbd_e2b"
+ },
+ "assign": {
+  "0": "26B",
+  "1": "E2B",
+  "2": "26B",
+  "3": "26B"
+ },
+ "gated": {
+  "1": "pbv3_e2el_c1"
+ },
+ "strong": "26B"
+}

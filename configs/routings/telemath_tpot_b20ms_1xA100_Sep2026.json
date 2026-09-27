@@ -1,0 +1,23 @@
+{
+ "name": "TeleMath, TPOT routing, B = 20 ms, Stage 1 + 2",
+ "_basis": "TeleMath test split, 201 questions, 1 x A100 80 GB, vLLM 0.19.0, concurrency 32, 5 runs of every tier and of every escalation batch",
+ "_probs": "accept probabilities: ymoslem/cluster-route-escalate-scores, config telemath_qe, source_file telemath/qe_probs_v3.jsonl",
+ "tau": 0.5,
+ "runs": 5,
+ "tiers": {
+  "E2B": "pbd_e2b",
+  "E4B-think": "pbd_e4bthink",
+  "Q30B": "pbd_q30b"
+ },
+ "assign": {
+  "0": "Q30B",
+  "1": "E2B",
+  "2": "Q30B",
+  "3": "E4B-think"
+ },
+ "gated": {
+  "1": "pbv3_tpot_c1",
+  "3": "pbv3_tpot_c3"
+ },
+ "strong": "Q30B"
+}

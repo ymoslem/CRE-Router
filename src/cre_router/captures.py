@@ -51,7 +51,7 @@ from typing import Any, Iterable
 from cre_router.evaluate import TASKS, Task, score_generations
 
 __all__ = ["CaptureError", "task_of", "generations_path", "load_generations",
-           "batch_means", "load_capture"]
+           "batch_means", "load_capture", "dataset_loader"]
 
 #: Model-id prefixes that start the model segment of a results directory name.
 #: A capture directory is ``results_<tag>_<model with / replaced by _>``, so the
@@ -239,3 +239,40 @@ def load_capture(
         raise CaptureError(f"{tag}: runs {sorted(runs)}, expected "
                            f"{sorted(set(expect_runs))}")
     return out
+
+
+def dataset_loader(dataset_dir: str | Path):
+    """A ``load(tag)`` that reads captures from the released captures dataset.
+
+    ``dataset_dir`` is a download of ``ymoslem/cluster-route-escalate-captures``.
+    Its rows were built by this module's rules (graded by the task, joined on
+    output length) and hold the same fields ``load_capture`` returns, so a
+    composition gives the same numbers from either source. Needs ``pyarrow``,
+    installed by the ``data`` extra.
+    """
+    import pyarrow.parquet as pq
+
+    cols = ["capture", "qid", "run", "cluster", "correct", "correct_as_run",
+            "output_tokens", "ttft_s", "tpot_ms", "e2el_s"]
+    rows: dict[str, dict] = {}
+    for f in sorted(Path(dataset_dir).glob("data/*/*.parquet")):
+        for r in pq.read_table(f, columns=cols).to_pylist():
+            rows.setdefault(r["capture"], {})[(str(r["qid"]), int(r["run"]))] = {
+                "correct": bool(r["correct"]), "correct_as_run": bool(r["correct_as_run"]),
+                "tokens": r["output_tokens"], "ttft_s": r["ttft_s"],
+                "tpot_ms": r["tpot_ms"], "e2el_s": r["e2el_s"],
+                "cluster": str(r["cluster"])}
+    if not rows:
+        raise CaptureError(f"{dataset_dir}: no parquet shards under data/")
+
+    def load(tag: str) -> dict[tuple[str, int], dict]:
+        if tag not in rows:
+            raise CaptureError(f"{tag}: not in the captures dataset")
+        cap = rows[tag]
+        if any(v["tpot_ms"] is None for v in cap.values()):
+            raise CaptureError(f"{tag}: kept only batch means, so it cannot carry a "
+                               f"per-request cost")
+        return cap
+
+    return load
+

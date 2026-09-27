@@ -44,8 +44,11 @@ serve = [
 eval = [
   "vllm>=0.19",
 ]
-full = ["cre-router[qe,serve,eval]"]
-dev = ["pytest>=8.0", "fastapi>=0.115", "httpx>=0.27"]
+data = [
+  "pyarrow>=14",
+]
+full = ["cre-router[qe,serve,eval,data]"]
+dev = ["pytest>=8.0", "fastapi>=0.115", "httpx>=0.27", "pyarrow>=14"]
 
 [tool.pytest.ini_options]
 markers = [

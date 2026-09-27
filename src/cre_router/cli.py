@@ -148,6 +148,32 @@ def cmd_fit(args: argparse.Namespace) -> None:
         print(f"Saved routing table to {out_dir}/router.json")
 
 
+def cmd_compose(args: argparse.Namespace) -> None:
+    from cre_router.captures import dataset_loader, load_capture
+    from cre_router.compose import Routing, compose, load_accept_probs
+
+    routing = Routing.from_json(args.routing)
+    if args.dataset:
+        load = dataset_loader(args.dataset)
+    else:
+        load = lambda tag: load_capture(tag, args.captures)  # noqa: E731
+    probs = load_accept_probs(args.probs, args.probs_source)
+    result = compose(routing, load, probs)
+    rows = (("Stage 1", result.stage1), ("Stage 1 + 2", result.stage1plus2))
+    if args.json:
+        print(json.dumps({"name": routing.name,
+                          "stage1": dict(zip(("accuracy", "tpot_ms", "e2el_s"), result.stage1)),
+                          "stage1plus2": dict(zip(("accuracy", "tpot_ms", "e2el_s"),
+                                                  result.stage1plus2)),
+                          "escalated_per_run": result.escalated_per_run}, indent=1))
+        return
+    print(routing.name or args.routing)
+    for label, (acc, tpot, e2el) in rows:
+        print(f"  {label:12s} accuracy {acc:.5f}   TPOT {tpot:.3f} ms   E2EL {e2el:.2f} s")
+    for c, n in result.escalated_per_run.items():
+        print(f"  cluster {c} escalations per run: {n}")
+
+
 def cmd_cascade(args: argparse.Namespace) -> None:
     stats = json.loads(Path(args.stats).read_text())
     models, cluster_sizes = models_from_stats(stats)
@@ -475,6 +501,21 @@ def main(argv: list[str] | None = None) -> None:
                    help="cascade stats JSON with assignment and escalations "
                         "(see configs/*_cascade_test.json)")
     p.set_defaults(func=cmd_cascade)
+
+    p = sub.add_parser(
+        "compose",
+        help="Stage 1 and Stage 1 + 2 accuracy, TPOT and E2EL from served captures",
+    )
+    p.add_argument("--routing", required=True, help="routing JSON (see configs/routings/)")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--captures", help="directory of raw captures, as cre evaluate saves them")
+    src.add_argument("--dataset", help="download of the released captures dataset "
+                                       "(needs the data extra)")
+    p.add_argument("--probs", required=True,
+                   help="accept probabilities: a JSONL dump, or the scores dataset's parquet")
+    p.add_argument("--probs-source", help="with a parquet --probs, the source_file to use")
+    p.add_argument("--json", action="store_true", help="print JSON instead of a table")
+    p.set_defaults(func=cmd_compose)
 
     p = sub.add_parser(
         "qe-train",
