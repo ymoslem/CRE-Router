@@ -2,71 +2,94 @@
  "_note": "Per-cluster training statistics for the TeleQnA four-model pool, measured on 1 x A100 at concurrency 32 under vLLM 0.19.0, the basis the paper reports. NOTHING is Pareto-dominated here and the sweep has six regions; on the submitted 2 x A100 configuration Gemma4-E2B and Gemma4-E4B were pruned and it had three. Reproduce lambda* with: cre fit --stats configs/teleqna_stats.json --budget 20",
  "basis": "1 x A100 SXM 80 GB, concurrency 32",
  "vllm_version": "0.19.0",
+ "error_tol": 0.001,
  "cluster_sizes": {
   "0": 5211,
   "1": 3789
  },
- "error_tol": 0.001,
  "models": {
   "Qwen3-4B": {
    "errors": {
-    "0": 0.2993,
-    "1": 0.3284
+    "0": 0.299252,
+    "1": 0.328372
    },
    "cluster_tpot_ms": {
-    "0": 10.773,
-    "1": 10.588
+    "0": 10.773406,
+    "1": 10.588378
    },
-   "vllm_version": "0.19.0",
+   "cluster_ttft_ms": {
+    "0": 45.983096,
+    "1": 43.261084
+   },
    "cluster_e2el_ms": {
-    "0": 461.156485,
-    "1": 497.925285
-   }
+    "0": 461.156276,
+    "1": 497.925097
+   },
+   "vllm_version": "0.19.0"
   },
   "Gemma4-E2B": {
    "errors": {
-    "0": 0.3377,
-    "1": 0.3926
+    "0": 0.337709,
+    "1": 0.39261
    },
    "cluster_tpot_ms": {
-    "0": 8.298,
-    "1": 8.277
+    "0": 8.29847,
+    "1": 8.277093
    },
-   "vllm_version": "0.19.0",
+   "cluster_ttft_ms": {
+    "0": 38.54115,
+    "1": 38.343336
+   },
    "cluster_e2el_ms": {
-    "0": 326.724882,
-    "1": 333.093337
-   }
+    "0": 326.724728,
+    "1": 333.093187
+   },
+   "vllm_version": "0.19.0"
   },
   "Gemma4-E4B": {
    "errors": {
-    "0": 0.2946,
-    "1": 0.3341
+    "0": 0.294608,
+    "1": 0.334072
    },
    "cluster_tpot_ms": {
-    "0": 11.77,
-    "1": 11.856
+    "0": 11.769513,
+    "1": 11.856016
    },
-   "vllm_version": "0.19.0",
+   "cluster_ttft_ms": {
+    "0": 45.31354,
+    "1": 45.157056
+   },
    "cluster_e2el_ms": {
-    "0": 453.028426,
-    "1": 487.204403
-   }
+    "0": 453.028264,
+    "1": 487.204234
+   },
+   "vllm_version": "0.19.0"
   },
   "Gemma4-26B": {
    "errors": {
-    "0": 0.2302,
-    "1": 0.2552
+    "0": 0.230244,
+    "1": 0.25516
    },
    "cluster_tpot_ms": {
-    "0": 30.283,
-    "1": 29.911
+    "0": 30.283067,
+    "1": 29.910674
    },
-   "vllm_version": "0.19.0",
+   "cluster_ttft_ms": {
+    "0": 101.949832,
+    "1": 99.796885
+   },
    "cluster_e2el_ms": {
-    "0": 1462.427078,
-    "1": 1516.036051
-   }
+    "0": 1462.426766,
+    "1": 1516.035764
+   },
+   "vllm_version": "0.19.0"
   }
+ },
+ "scorer_version": 2,
+ "built_from": {
+  "Qwen3-4B": "tq1g_train_q4bi",
+  "Gemma4-E2B": "tq1g_train_e2b",
+  "Gemma4-E4B": "tq1g_train_e4b",
+  "Gemma4-26B": "tq1g_train_26b"
  }
 }

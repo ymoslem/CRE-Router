@@ -1,0 +1,17 @@
+{
+ "name": "telemath_stats_1xA100_Sep2026",
+ "_note": "Per-cluster TRAINING statistics for the nine-model TeleMath pool, measured on 1 x A100 at concurrency 32 under vLLM 0.19.0, k = 4 clusters over the 299-question train split. This is the only pool in the package whose cost ordering CHANGES between clusters, 5 of 36 model pairs under TPOT and 3 of 36 under E2EL, which is the precondition a per-cluster cost rule needs to change a routing at all; on the AIME and TeleQnA pools both rules return the same routing. Fit it with `cre fit --stats configs/telemath_stats_1xA100_Sep2026.json --budget 25 --cost-metric tpot` or `--cost-metric e2el --budget 25000`, and add `--cost-conditioning cluster` to price cost per (model, cluster) instead of per model.",
+ "error_tol": 0.001,
+ "vllm_version": "0.19.0",
+ "models": {
+  "Gemma4-26B-A4B": "tm_train_26b_nothink_regen",
+  "Gemma4-26B-A4B-think": "tm_train_gemma-4-26B-A4B-it_think_r5",
+  "Gemma4-E2B": "tm_train_e2b_nothink_regen",
+  "Gemma4-E2B-think": "tm_train_e2b_think_regen3",
+  "Gemma4-E4B": "tm_train_e4b_nothink_regen",
+  "Gemma4-E4B-think": "tm_train_e4b_think_gen5",
+  "Qwen3-4B-Instruct-2507": "tm_train_instruct_nothink_regen",
+  "Qwen3-4B-Thinking-2507": "tm_train_qwen4bthink_regen",
+  "Qwen3-30B-A3B-Thinking-2507": "tm_train_qwen30b_think_r5"
+ }
+}

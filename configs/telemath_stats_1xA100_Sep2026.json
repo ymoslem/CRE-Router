@@ -1,12 +1,13 @@
 {
  "_note": "Per-cluster TRAINING statistics for the nine-model TeleMath pool, measured on 1 x A100 at concurrency 32 under vLLM 0.19.0, k = 4 clusters over the 299-question train split. This is the only pool in the package whose cost ordering CHANGES between clusters, 5 of 36 model pairs under TPOT and 3 of 36 under E2EL, which is the precondition a per-cluster cost rule needs to change a routing at all; on the AIME and TeleQnA pools both rules return the same routing. Fit it with `cre fit --stats configs/telemath_stats_1xA100_Sep2026.json --budget 25 --cost-metric tpot` or `--cost-metric e2el --budget 25000`, and add `--cost-conditioning cluster` to price cost per (model, cluster) instead of per model.",
+ "error_tol": 0.001,
+ "vllm_version": "0.19.0",
  "cluster_sizes": {
   "0": 98,
   "1": 98,
   "2": 51,
   "3": 52
  },
- "error_tol": 0.001,
  "models": {
   "Gemma4-26B-A4B": {
    "errors": {
@@ -18,8 +19,14 @@
    "cluster_tpot_ms": {
     "0": 25.113912,
     "1": 24.938721,
-    "2": 24.037456,
+    "2": 24.037457,
     "3": 24.282456
+   },
+   "cluster_ttft_ms": {
+    "0": 140.623164,
+    "1": 122.566412,
+    "2": 120.103715,
+    "3": 117.367483
    },
    "cluster_e2el_ms": {
     "0": 32159.201347,
@@ -40,7 +47,13 @@
     "0": 35.718554,
     "1": 33.175104,
     "2": 30.847787,
-    "3": 31.222127
+    "3": 31.222126
+   },
+   "cluster_ttft_ms": {
+    "0": 208.760439,
+    "1": 226.581198,
+    "2": 352.165715,
+    "3": 255.106772
    },
    "cluster_e2el_ms": {
     "0": 510905.613783,
@@ -63,6 +76,12 @@
     "2": 7.617801,
     "3": 7.242649
    },
+   "cluster_ttft_ms": {
+    "0": 60.766321,
+    "1": 54.321151,
+    "2": 81.803653,
+    "3": 78.289519
+   },
    "cluster_e2el_ms": {
     "0": 12789.37878,
     "1": 10680.324602,
@@ -84,6 +103,12 @@
     "2": 8.090005,
     "3": 7.560497
    },
+   "cluster_ttft_ms": {
+    "0": 60.263307,
+    "1": 51.76074,
+    "2": 73.328122,
+    "3": 94.27804
+   },
    "cluster_e2el_ms": {
     "0": 24170.952156,
     "1": 20603.34563,
@@ -100,10 +125,16 @@
     "3": 0.523077
    },
    "cluster_tpot_ms": {
-    "0": 12.061868,
+    "0": 12.061869,
     "1": 11.631294,
     "2": 11.877956,
     "3": 11.30812
+   },
+   "cluster_ttft_ms": {
+    "0": 79.13226,
+    "1": 71.554066,
+    "2": 102.492064,
+    "3": 95.799627
    },
    "cluster_e2el_ms": {
     "0": 19203.045943,
@@ -126,6 +157,12 @@
     "2": 12.526423,
     "3": 11.744952
    },
+   "cluster_ttft_ms": {
+    "0": 79.366551,
+    "1": 70.781214,
+    "2": 95.010498,
+    "3": 87.676196
+   },
    "cluster_e2el_ms": {
     "0": 34534.289986,
     "1": 26858.197631,
@@ -142,10 +179,16 @@
     "3": 0.45
    },
    "cluster_tpot_ms": {
-    "0": 14.286837,
+    "0": 14.286836,
     "1": 11.718702,
     "2": 12.591019,
     "3": 10.164074
+   },
+   "cluster_ttft_ms": {
+    "0": 84.476572,
+    "1": 61.979132,
+    "2": 79.712078,
+    "3": 72.579142
    },
    "cluster_e2el_ms": {
     "0": 45280.904411,
@@ -168,11 +211,17 @@
     "2": 27.244493,
     "3": 18.709376
    },
+   "cluster_ttft_ms": {
+    "0": 884.710906,
+    "1": 449.570958,
+    "2": 415.833192,
+    "3": 2041.539324
+   },
    "cluster_e2el_ms": {
     "0": 290853.666908,
     "1": 175999.599465,
     "2": 380547.531018,
-    "3": 160734.162355
+    "3": 160734.162356
    },
    "vllm_version": "0.19.0"
   },
@@ -189,6 +238,12 @@
     "2": 25.575232,
     "3": 21.77383
    },
+   "cluster_ttft_ms": {
+    "0": 193.369082,
+    "1": 566.003297,
+    "2": 724.833484,
+    "3": 99.389614
+   },
    "cluster_e2el_ms": {
     "0": 200507.025389,
     "1": 117561.731433,
@@ -197,5 +252,17 @@
    },
    "vllm_version": "0.19.0"
   }
+ },
+ "scorer_version": 2,
+ "built_from": {
+  "Gemma4-26B-A4B": "tm_train_26b_nothink_regen",
+  "Gemma4-26B-A4B-think": "tm_train_gemma-4-26B-A4B-it_think_r5",
+  "Gemma4-E2B": "tm_train_e2b_nothink_regen",
+  "Gemma4-E2B-think": "tm_train_e2b_think_regen3",
+  "Gemma4-E4B": "tm_train_e4b_nothink_regen",
+  "Gemma4-E4B-think": "tm_train_e4b_think_gen5",
+  "Qwen3-4B-Instruct-2507": "tm_train_instruct_nothink_regen",
+  "Qwen3-4B-Thinking-2507": "tm_train_qwen4bthink_regen",
+  "Qwen3-30B-A3B-Thinking-2507": "tm_train_qwen30b_think_r5"
  }
 }

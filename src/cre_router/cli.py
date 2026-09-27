@@ -174,6 +174,24 @@ def cmd_compose(args: argparse.Namespace) -> None:
         print(f"  cluster {c} escalations per run: {n}")
 
 
+def cmd_stats(args: argparse.Namespace) -> None:
+    from cre_router.captures import dataset_loader, load_capture
+    from cre_router.stats import build_stats, load_pool
+
+    pool = load_pool(args.pool)
+    if args.dataset:
+        source = dataset_loader(args.dataset)
+        load = lambda tag: source(tag, require_cost=False)  # noqa: E731
+    else:
+        load = lambda tag: load_capture(tag, args.captures, require_cost=False)  # noqa: E731
+    stats = build_stats(pool, load)
+    out = Path(args.out)
+    if out.exists() and not args.overwrite:
+        raise SystemExit(f"{out} exists; pass --overwrite to replace it")
+    out.write_text(json.dumps(stats, indent=1) + "\n")
+    print(f"wrote {out}: {len(stats['models'])} models, clusters {stats['cluster_sizes']}")
+
+
 def cmd_cascade(args: argparse.Namespace) -> None:
     stats = json.loads(Path(args.stats).read_text())
     models, cluster_sizes = models_from_stats(stats)
@@ -501,6 +519,19 @@ def main(argv: list[str] | None = None) -> None:
                    help="cascade stats JSON with assignment and escalations "
                         "(see configs/*_cascade_test.json)")
     p.set_defaults(func=cmd_cascade)
+
+    p = sub.add_parser(
+        "stats",
+        help="build the per-cluster stats file cre fit reads, from saved captures",
+    )
+    p.add_argument("--pool", required=True, help="pool spec JSON (see configs/pools/)")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--captures", help="directory of raw captures, as cre evaluate saves them")
+    src.add_argument("--dataset", help="download of the released captures dataset "
+                                       "(needs the data extra)")
+    p.add_argument("--out", required=True, help="stats JSON to write")
+    p.add_argument("--overwrite", action="store_true")
+    p.set_defaults(func=cmd_stats)
 
     p = sub.add_parser(
         "compose",

@@ -1,0 +1,17 @@
+{
+ "name": "telemath_stats_2xA100_Sep2026",
+ "_note": "Per-cluster TRAINING statistics for the nine-model TeleMath pool, measured on 2 x A100 (tensor parallel 2) at concurrency 32 under vLLM 0.19.0, k = 4 clusters over the 299-question train split. Cost ordering changes between clusters for 2 of 36 model pairs under TPOT and 3 of 36 under E2EL. Fit it with `cre fit --stats configs/telemath_stats_2xA100_Sep2026.json --budget 20` or `--cost-metric e2el --budget 25000`, and add `--cost-conditioning cluster` to price cost per (model, cluster).",
+ "error_tol": 0.001,
+ "vllm_version": "0.19.0",
+ "models": {
+  "Gemma4-26B-A4B": "tm2x_train_26b_nothink",
+  "Gemma4-26B-A4B-think": "tm2x_train_26b_think",
+  "Gemma4-E2B": "tm2x_train_e2b_nothink",
+  "Gemma4-E2B-think": "tm2x_train_e2b_think",
+  "Gemma4-E4B": "tm2x_train_e4b_nothink",
+  "Gemma4-E4B-think": "tm2x_train_e4b_think",
+  "Qwen3-30B-A3B-Thinking-2507": "tm2x_train_qwen30b_think",
+  "Qwen3-4B-Instruct-2507": "tm2x_train_instruct_nothink",
+  "Qwen3-4B-Thinking-2507": "tm2x_train_qwen4bthink"
+ }
+}

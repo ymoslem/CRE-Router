@@ -253,7 +253,8 @@ def dataset_loader(dataset_dir: str | Path):
     import pyarrow.parquet as pq
 
     cols = ["capture", "qid", "run", "cluster", "correct", "correct_as_run",
-            "output_tokens", "ttft_s", "tpot_ms", "e2el_s"]
+            "output_tokens", "ttft_s", "tpot_ms", "e2el_s",
+            "batch_ttft_ms", "batch_tpot_ms", "batch_e2el_ms"]
     rows: dict[str, dict] = {}
     for f in sorted(Path(dataset_dir).glob("data/*/*.parquet")):
         for r in pq.read_table(f, columns=cols).to_pylist():
@@ -261,15 +262,16 @@ def dataset_loader(dataset_dir: str | Path):
                 "correct": bool(r["correct"]), "correct_as_run": bool(r["correct_as_run"]),
                 "tokens": r["output_tokens"], "ttft_s": r["ttft_s"],
                 "tpot_ms": r["tpot_ms"], "e2el_s": r["e2el_s"],
-                "cluster": str(r["cluster"])}
+                "cluster": str(r["cluster"]), "batch_ttft_ms": r["batch_ttft_ms"],
+                "batch_tpot_ms": r["batch_tpot_ms"], "batch_e2el_ms": r["batch_e2el_ms"]}
     if not rows:
         raise CaptureError(f"{dataset_dir}: no parquet shards under data/")
 
-    def load(tag: str) -> dict[tuple[str, int], dict]:
+    def load(tag: str, require_cost: bool = True) -> dict[tuple[str, int], dict]:
         if tag not in rows:
             raise CaptureError(f"{tag}: not in the captures dataset")
         cap = rows[tag]
-        if any(v["tpot_ms"] is None for v in cap.values()):
+        if require_cost and any(v["tpot_ms"] is None for v in cap.values()):
             raise CaptureError(f"{tag}: kept only batch means, so it cannot carry a "
                                f"per-request cost")
         return cap
