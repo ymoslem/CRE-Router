@@ -61,7 +61,8 @@ class Routing:
 
     ``tiers`` names each model's Stage 1 capture; ``assign`` maps cluster to
     model name; ``gated`` maps a gated cluster to the stem of its escalation
-    captures, run ``r`` being ``<stem>_r<r>``; ``strong`` is the model those
+    captures, run ``r`` being ``<stem>_r<r>``, and clusters whose escalations
+    were served together share a stem; ``strong`` is the model those
     escalations were served by, for the record.
     """
 
@@ -183,6 +184,36 @@ def compose(routing: Routing, load: Callable[[str], Mapping],
                             key=lambda q: (len(q), q))
                   for c in sorted(routing.assign)}
 
+    # Which (question, run) each gated cluster escalates, from the estimator.
+    esc_sets: dict[str, list[set[str]]] = {}
+    for c in routing.gated:
+        qs = by_cluster[c]
+        _check_pairing(probs, caps[routing.assign[c]], qs, f"cluster {c}, {routing.assign[c]}")
+        sets = []
+        for r in range(runs):
+            missing = [q for q in qs if (q, r) not in probs]
+            if missing:
+                raise ValueError(f"cluster {c} run {r}: {len(missing)} gated questions "
+                                 f"have no accept probability, e.g. {missing[0]}")
+            sets.append({q for q in qs if probs[(q, r)]["p_accept"] < routing.tau})
+        esc_sets[c] = sets
+
+    # Each run's escalations were served as one batch per stem. Several gated
+    # clusters may share a stem, so the batch must hold exactly their union.
+    served: dict[tuple[str, int], Mapping] = {}
+    for stem in sorted(set(routing.gated.values())):
+        members = [c for c, s in routing.gated.items() if s == stem]
+        for r in range(runs):
+            want = set().union(*(esc_sets[c][r] for c in members))
+            if not want:
+                continue
+            cap = load(f"{stem}_r{r}")
+            got = {q for q, _ in cap}
+            if got != want:
+                raise ValueError(f"{stem}_r{r} holds {len(got)} questions but run {r} "
+                                 f"escalates {len(want)} in cluster(s) {', '.join(members)}")
+            served[(stem, r)] = cap
+
     s1_parts, s12_parts, escalated = [], [], {}
     for c, qs in by_cluster.items():
         tier = _grids(caps[routing.assign[c]], qs, runs)
@@ -191,35 +222,17 @@ def compose(routing: Routing, load: Callable[[str], Mapping],
         if c not in routing.gated:
             s12_parts.append(per_request_metrics(off, ~off, tier, tier))
             continue
-
-        cap_eff = caps[routing.assign[c]]
-        _check_pairing(probs, cap_eff, qs, f"cluster {c}, {routing.assign[c]}")
-        esc_sets = []
-        for r in range(runs):
-            missing = [q for q in qs if (q, r) not in probs]
-            if missing:
-                raise ValueError(f"cluster {c} run {r}: {len(missing)} gated questions "
-                                 f"have no accept probability, e.g. {missing[0]}")
-            esc_sets.append({q for q in qs if probs[(q, r)]["p_accept"] < routing.tau})
-        strong = []
-        for r, want in enumerate(esc_sets):
-            if not want:
-                strong.append(None)
-                continue
-            cap = load(f"{routing.gated[c]}_r{r}")
-            got = {q for q, _ in cap}
-            if got != want:
-                raise ValueError(f"{routing.gated[c]}_r{r} holds {len(got)} questions but "
-                                 f"run {r} escalates {len(want)} in cluster {c}")
-            strong.append(_grids(cap, qs, runs, keep=want))
-        esc = np.array([[q in esc_sets[r] for r in range(runs)] for q in qs])
+        sets, stem = esc_sets[c], routing.gated[c]
+        strong = [_grids(served[(stem, r)], qs, runs, keep=sets[r]) if sets[r] else None
+                  for r in range(runs)]
+        esc = np.array([[q in sets[r] for r in range(runs)] for q in qs])
         if all(x is None for x in strong):
             # Nobody escalated in any run, so no strong capture exists to size the
             # strong-run axis. The masks never read it; the tier's own grid stands
             # in, keeping the efficient pass priced on the run it was decided from.
             strong = [tier] * runs
         s12_parts.append(per_request_metrics(~off, esc, tier, strong))
-        escalated[c] = [len(s) for s in esc_sets]
+        escalated[c] = [len(x) for x in sets]
 
     def stack(parts):
         return tuple(np.concatenate([p[m] for p in parts], axis=0) for m in range(3))

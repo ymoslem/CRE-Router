@@ -81,5 +81,24 @@ def test_probabilities_from_another_sampling_run_are_refused():
 
 
 def test_an_escalation_capture_holding_other_questions_is_refused():
-    with pytest.raises(ValueError, match="escalates 2 in cluster 1"):
+    with pytest.raises(ValueError, match=r"escalates 2 in cluster\(s\) 1"):
         compose(ROUTING, load, probs(p4=0.1))
+
+
+def test_clusters_can_share_one_escalation_batch():
+    """Two gated clusters escalated together: the batch must hold their union."""
+    shared = {f"both_r{r}": {**{("q1", s): {"correct": True, "tokens": 21, "tpot_ms": 30.0,
+                                            "e2el_s": 5.0, "cluster": "0"} for s in range(RUNS)},
+                             **{("q3", s): {"correct": True, "tokens": 21, "tpot_ms": 30.0,
+                                            "e2el_s": 5.0, "cluster": "1"} for s in range(RUNS)}}
+              for r in range(RUNS)}
+    caps = {"a": A, "b": B, **shared}
+    routing = Routing(tiers={"A": "a", "B": "b"}, assign={"0": "A", "1": "B"},
+                      gated={"0": "both", "1": "both"}, strong="C", tau=0.5, runs=RUNS)
+    p = {(q, r): {"p_accept": v, "num_tokens": 11}
+         for q, v in (("q1", 0.1), ("q2", 0.9), ("q3", 0.1), ("q4", 0.9)) for r in range(RUNS)}
+    result = compose(routing, caps.__getitem__, p)
+    assert result.escalated_per_run == {"0": [1, 1], "1": [1, 1]}
+    p[("q4", 0)]["p_accept"] = 0.1      # now run 0 escalates a question the batch lacks
+    with pytest.raises(ValueError, match=r"escalates 3 in cluster\(s\) 0, 1"):
+        compose(routing, caps.__getitem__, p)
