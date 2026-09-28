@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 
 from cre_router.qe.classifier import ACCEPT, ROUTE
+from cre_router.textutils import HelpFormatter
 
 
 def to_binary_label(decision_label) -> int:
@@ -84,17 +85,19 @@ def evaluate_split(classifier, dataset_split, batch_size: int = 32) -> tuple[lis
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser = argparse.ArgumentParser(prog="cre qe-eval", description=__doc__.split("\n", 1)[0],
+                                     formatter_class=HelpFormatter)
     parser.add_argument("--classifier", required=True, help="trained QE checkpoint")
     parser.add_argument("--dataset", required=True, help="HF dataset of model outputs")
     parser.add_argument("--split", required=True, help="dataset split to evaluate")
     parser.add_argument("--base-tokenizer", default=None,
                         help="defaults to the checkpoint itself, which ships its own tokenizer; "
                              "give a base model id only for a checkpoint saved without one")
-    parser.add_argument("--max-length", type=int, default=4096, help="4096 AIME, 512 TeleQnA")
-    parser.add_argument("--accept-threshold", type=float, default=0.5)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--cache-dir", default=None)
+    parser.add_argument("--max-length", type=int, default=4096, help="4096 for AIME and TeleMath, 512 for TeleQnA")
+    parser.add_argument("--accept-threshold", type=float, default=0.5,
+                        help="escalate when the accept probability is below this")
+    parser.add_argument("--batch-size", type=int, default=32, help="classifier batch size")
+    parser.add_argument("--cache-dir", default=None, help="Hugging Face datasets cache")
     args = parser.parse_args(argv)
 
     from datasets import load_dataset

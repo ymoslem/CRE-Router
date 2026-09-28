@@ -1,13 +1,18 @@
 """``cre`` command-line interface.
 
-  cre cluster   embed training queries, select k, fit centroids
-  cre evaluate  measure per-cluster accuracy and TPOT for a model (requires [eval])
-  cre fit       Pareto-prune the pool, sweep lambda, select lambda* for a budget
-  cre qe-train  fine-tune the accept/escalate QE classifier (requires [qe])
-  cre qe-eval   evaluate a trained QE classifier on a split (requires [qe])
-  cre serve     run the cascade router (requires [serve])
+  cre cluster     embed training queries, select k, fit centroids
+  cre evaluate    measure per-cluster accuracy, TPOT and E2EL for a model (requires [eval])
+  cre fit         Pareto-prune the pool, sweep lambda, select lambda* for a budget
+  cre qe-train    fine-tune the accept/escalate QE classifier (requires [qe])
+  cre qe-eval     evaluate a trained QE classifier on a split (requires [qe])
+  cre qe-cascade  replay a QE classifier over saved generations (requires [qe])
+  cre serve       run the cascade router (requires [serve])
+  cre stats       build the stats file cre fit reads from saved captures
+  cre compose     measure Stage 1 and Stage 1 + 2 on the batches that were served
+  cre cascade     estimate Stage 1 + 2 from per-cluster averages
 
-End to end: cluster -> evaluate (per model) -> fit -> qe-train -> serve.
+End to end: cluster -> evaluate (per model) -> fit -> qe-train -> qe-cascade -> serve.
+Offline, from saved captures: stats -> fit -> compose.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from pathlib import Path
 from cre_router.artifacts import RouterArtifacts
 from cre_router.clustering import DEFAULT_EMBEDDING_MODEL
 from cre_router.evaluate import TASKS
+from cre_router.textutils import HelpFormatter
 from cre_router.routing import (
     cascade_system_accuracy,
     cascade_system_metrics,
@@ -411,26 +417,35 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="cre", description=__doc__.split("\n", 1)[0])
+    parser = argparse.ArgumentParser(
+        prog="cre", description="Cluster, Route, Escalate: cost-aware LLM routing.",
+        epilog="End to end: cluster -> evaluate (per model) -> fit -> qe-train -> "
+               "qe-cascade -> serve. Offline, from saved captures: stats -> fit -> compose.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("cluster", help="fit k-means centroids over training queries")
+    def command(name: str, help: str, **kw) -> argparse.ArgumentParser:
+        return sub.add_parser(name, help=help, description=help,
+                              formatter_class=HelpFormatter, **kw)
+
+    p = command("cluster", "fit k-means centroids over training queries")
     p.add_argument("--input", required=True, help="JSONL file of training queries")
     p.add_argument("--text-field", default="prompt", help="JSONL field to embed")
     p.add_argument("--embeddings-field", default=None,
                    help="cluster precomputed embeddings from this field instead of re-embedding "
                         "(reproduction aid; e.g. the released datasets' 'embeddings' column)")
     p.add_argument("--output", required=True, help="artifacts directory")
-    p.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL)
+    p.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL,
+                   help="sentence-transformers model that embeds the queries")
     p.add_argument("--k", type=int, default=None, help="force k instead of Silhouette selection")
-    p.add_argument("--k-min", type=int, default=2)
-    p.add_argument("--k-max", type=int, default=9, help="inclusive; paper uses k in [2, 9]")
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--k-min", type=int, default=2, help="smallest k Silhouette selection tries")
+    p.add_argument("--k-max", type=int, default=9, help="largest k Silhouette selection tries, inclusive")
+    p.add_argument("--seed", type=int, default=0, help="k-means seed")
     p.set_defaults(func=cmd_cluster)
 
-    p = sub.add_parser(
+    p = command(
         "evaluate",
-        help="measure per-cluster accuracy and TPOT for one model (requires [eval] + a running vLLM server)",
+        "measure per-cluster accuracy, TPOT and E2EL for one model "
+        "(requires [eval] + a running vLLM server)",
     )
     p.add_argument("--task", required=True, choices=sorted(TASKS),
                    help="dataset task")
@@ -491,7 +506,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     p.set_defaults(func=cmd_evaluate)
 
-    p = sub.add_parser("fit", help="compute the routing table from model stats")
+    p = command("fit", "compute the routing table and lambda* from model stats")
     p.add_argument("--stats", required=True, help="JSON stats file (see configs/)")
     p.add_argument("--budget", type=float, required=True,
                    help="cost budget B in ms, in the units of --cost-metric")
@@ -501,43 +516,42 @@ def main(argv: list[str] | None = None) -> None:
                         "(0.001 if absent). Pass 0 for an exact comparison.")
     p.add_argument(
         "--cost-conditioning", choices=COST_CONDITIONING, default=DEFAULT_COST_CONDITIONING,
-        help="whether Eq. 2 prices a model or a (model, cluster) pair; 'model' is "
-             "the published rule and reproduces every published result, 'cluster' "
-             "prices each cluster on its own measurement and needs per-cluster costs",
+        help="whether Eq. 2 prices a model or a (model, cluster) pair: 'model' "
+             "prices one cost per model, as Eq. 2 is published; 'cluster' prices each "
+             "cluster on its own measurement and needs per-cluster costs",
     )
     p.add_argument("--cost-metric", choices=("tpot", "e2el"), default="tpot",
-                   help="measurement used as Cost: 'tpot' (default) or 'e2el' "
+                   help="measurement used as Cost: 'tpot' or 'e2el' "
                         "end-to-end request latency, "
                         "needed when pool members differ in output length rather "
                         "than decode speed, such as a thinking/non-thinking pair")
     p.add_argument("--output", default=None, help="artifacts directory to update")
     p.set_defaults(func=cmd_fit)
 
-    p = sub.add_parser(
+    p = command(
         "cascade",
-        help="Stage 1+2 system latency (TPOT and E2EL) from measured stats",
+        "estimate Stage 1 + 2 accuracy, TPOT and E2EL from per-cluster averages; "
+        "use cre compose for measured results",
     )
     p.add_argument("--stats", required=True,
                    help="cascade stats JSON with assignment and escalations "
                         "(see configs/*_cascade_test_*.json)")
     p.set_defaults(func=cmd_cascade)
 
-    p = sub.add_parser(
-        "stats",
-        help="build the per-cluster stats file cre fit reads, from saved captures",
-    )
+    p = command("stats", "build the per-cluster stats file cre fit reads, from saved captures")
     p.add_argument("--pool", required=True, help="pool spec JSON (see configs/pools/)")
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--captures", help="directory of raw captures, as cre evaluate saves them")
     src.add_argument("--dataset", help="download of the released captures dataset "
                                        "(needs the data extra)")
     p.add_argument("--out", required=True, help="stats JSON to write")
-    p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--overwrite", action="store_true", help="replace --out if it exists")
     p.set_defaults(func=cmd_stats)
 
-    p = sub.add_parser(
+    p = command(
         "compose",
-        help="Stage 1 and Stage 1 + 2 accuracy, TPOT and E2EL from served captures",
+        "measure a routing's Stage 1 and Stage 1 + 2 accuracy, TPOT and E2EL on the "
+        "batches that were served",
     )
     p.add_argument("--routing", required=True, help="routing JSON (see configs/routings/)")
     src = p.add_mutually_exclusive_group(required=True)
@@ -553,20 +567,20 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser(
         "qe-train",
-        help="fine-tune the QE classifier (all flags forwarded, see --help)",
+        help="fine-tune the QE classifier (requires [qe]; see cre qe-train --help)",
         add_help=False,
     )
 
     p = sub.add_parser(
         "qe-eval",
-        help="evaluate a trained QE classifier on a split (all flags forwarded, see --help)",
+        help="evaluate a trained QE classifier on a split (requires [qe]; see cre qe-eval --help)",
         add_help=False,
     )
 
-    p = sub.add_parser(
+    p = command(
         "qe-cascade",
-        help="run the QE classifier over an efficient model's generations and "
-             "compose per-cluster cascade accuracy + escalation counts (requires [qe])",
+        "run the QE classifier over an efficient model's generations and "
+        "compose per-cluster cascade accuracy + escalation counts (requires [qe])",
     )
     p.add_argument("--classifier", required=True, help="trained QE checkpoint")
     p.add_argument("--generations", required=True,
@@ -580,14 +594,15 @@ def main(argv: list[str] | None = None) -> None:
                    help="defaults to the checkpoint itself, which ships its own tokenizer; "
                         "give a base model id only for a checkpoint saved without one")
     p.add_argument("--max-length", type=int, default=4096, help="4096 for long reasoning, 512 for short MCQ")
-    p.add_argument("--accept-threshold", type=float, default=0.5)
-    p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument("--accept-threshold", type=float, default=0.5,
+                   help="escalate when the accept probability is below this")
+    p.add_argument("--batch-size", type=int, default=32, help="classifier batch size")
     p.set_defaults(func=cmd_qe_cascade)
 
-    p = sub.add_parser("serve", help="run the cascade router")
+    p = command("serve", "run the cascade router (requires [serve])")
     p.add_argument("--config", required=True, help="YAML serving config")
-    p.add_argument("--host", default="0.0.0.0")
-    p.add_argument("--port", type=int, default=4000)
+    p.add_argument("--host", default="0.0.0.0", help="address to listen on")
+    p.add_argument("--port", type=int, default=4000, help="port to listen on")
     p.set_defaults(func=cmd_serve)
 
     argv = sys.argv[1:] if argv is None else argv

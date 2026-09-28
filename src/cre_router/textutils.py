@@ -2,6 +2,20 @@
 
 from __future__ import annotations
 
+import argparse
+
+
+class HelpFormatter(argparse.HelpFormatter):
+    """Appends each option's default to its help, unless it is unset or a flag."""
+
+    def _get_help_string(self, action: argparse.Action) -> str:
+        text = action.help or ""
+        default = action.default
+        if (default is None or isinstance(default, bool) or default is argparse.SUPPRESS
+                or "default" in text):
+            return text
+        return f"{text} (default: %(default)s)" if text else "default: %(default)s"
+
 
 def split_thinking(text: str) -> str:
     """Return the post-reasoning content, dropping a leading reasoning block.

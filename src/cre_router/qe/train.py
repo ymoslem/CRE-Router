@@ -37,39 +37,45 @@ from __future__ import annotations
 import argparse
 
 from cre_router.qe.classifier import MAX_OUTPUT_WORDS, format_qe_input
+from cre_router.textutils import HelpFormatter
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser = argparse.ArgumentParser(prog="cre qe-train", description=__doc__.split("\n", 1)[0],
+                                     formatter_class=HelpFormatter)
     parser.add_argument("--dataset", required=True, help="HF dataset with QE training data")
-    parser.add_argument("--base-model", default="answerdotai/ModernBERT-base")
+    parser.add_argument("--base-model", default="answerdotai/ModernBERT-base",
+                        help="encoder to fine-tune")
     parser.add_argument("--train-split", default=None, help="default: first split starting with 'train'")
     parser.add_argument("--eval-split", default=None, help="default: first split starting with 'test'")
     parser.add_argument("--eval-run", type=int, default=None,
                         help="optional: evaluate on this run only, for a split that carries a "
                              "'run' column. Default is every row of the split")
-    parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--max-length", type=int, default=4096, help="4096 for AIME, 512 for TeleQnA")
-    parser.add_argument("--max-output-words", type=int, default=MAX_OUTPUT_WORDS)
-    parser.add_argument("--learning-rate", type=float, default=5e-5, help="5e-5 AIME, 2e-5 TeleQnA")
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--early-stopping-patience", type=int, default=4)
+    parser.add_argument("--output-dir", required=True, help="where to save the checkpoint")
+    parser.add_argument("--max-length", type=int, default=4096, help="4096 for AIME and TeleMath, 512 for TeleQnA")
+    parser.add_argument("--max-output-words", type=int, default=MAX_OUTPUT_WORDS,
+                        help="keep only the last this-many words of each answer")
+    parser.add_argument("--learning-rate", type=float, default=5e-5, help="5e-5 for AIME, 2e-5 for TeleQnA and TeleMath")
+    parser.add_argument("--epochs", type=int, default=10, help="training epochs")
+    parser.add_argument("--batch-size", type=int, default=64, help="training batch size")
+    parser.add_argument("--early-stopping-patience", type=int, default=4,
+                        help="epochs without improvement in eval macro F1 before stopping")
     parser.add_argument(
         "--attn-implementation",
         default="flash_attention_2",
         help="attention kernel for ModernBERT; use 'sdpa' if flash-attn is unavailable",
     )
-    parser.add_argument("--no-class-weights", action="store_true")
-    parser.add_argument("--cache-dir", default=None)
+    parser.add_argument("--no-class-weights", action="store_true",
+                        help="train without weighting the loss by class frequency")
+    parser.add_argument("--cache-dir", default=None, help="Hugging Face datasets cache")
     parser.add_argument(
         "--report-to",
         default="none",
         help="training logger (default none; use 'tensorboard' if installed)",
     )
-    parser.add_argument("--push-to-hub", action="store_true")
-    parser.add_argument("--hub-private", action="store_true")
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--push-to-hub", action="store_true", help="upload the checkpoint")
+    parser.add_argument("--hub-private", action="store_true", help="make the upload private")
+    parser.add_argument("--seed", type=int, default=0, help="training seed")
     return parser
 
 
