@@ -1,5 +1,5 @@
 {
- "_note": "Per-cluster training statistics for the AIME 1983-2023 pool, measured on 1 x A100 at concurrency 32 under vLLM 0.19.0, the basis the paper reports. Five runs, errors regraded from full_output. Reproduce lambda* with: cre fit --stats configs/aime_stats.json --budget 30",
+ "_note": "Per-cluster training statistics for the AIME 1983-2023 pool, measured on 1 x A100 at concurrency 32 under vLLM 0.19.0. Five runs, errors regraded from full_output. Reproduce lambda* with: cre fit --stats configs/aime_stats_1xA100_Sep2026.json --budget 30",
  "basis": "1 x A100 SXM 80 GB, concurrency 32",
  "vllm_version": "0.19.0",
  "error_tol": 0.001,

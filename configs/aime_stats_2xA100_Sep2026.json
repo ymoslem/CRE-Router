@@ -1,0 +1,64 @@
+{
+ "_note": "Per-cluster training statistics for the AIME 1983-2023 pool, measured on 2 x A100 (tensor parallel 2) at concurrency 32 under vLLM 0.19.0. Five runs, errors regraded from full_output. Fitted on its own costs: `cre fit --stats configs/aime_stats_2xA100_Sep2026.json --budget 20`.",
+ "basis": "2 x A100 SXM 80 GB (tensor parallel 2), concurrency 32",
+ "vllm_version": "0.19.0",
+ "error_tol": 0.001,
+ "cluster_sizes": {
+  "0": 194,
+  "1": 405,
+  "2": 322
+ },
+ "models": {
+  "VibeThinker-1.5B": {
+   "errors": {
+    "0": 0.14433,
+    "1": 0.089877,
+    "2": 0.190062
+   },
+   "cluster_tpot_ms": {
+    "0": 6.99676,
+    "1": 7.35145,
+    "2": 7.852675
+   },
+   "cluster_ttft_ms": {
+    "0": 61.088187,
+    "1": 51.207697,
+    "2": 54.97452
+   },
+   "cluster_e2el_ms": {
+    "0": 94470.120989,
+    "1": 92334.409557,
+    "2": 125925.680229
+   },
+   "vllm_version": "0.19.0"
+  },
+  "Qwen3-30B-A3B": {
+   "errors": {
+    "0": 0.050515,
+    "1": 0.033086,
+    "2": 0.091925
+   },
+   "cluster_tpot_ms": {
+    "0": 23.263984,
+    "1": 24.040586,
+    "2": 26.58687
+   },
+   "cluster_ttft_ms": {
+    "0": 141.872449,
+    "1": 154.440543,
+    "2": 186.83516
+   },
+   "cluster_e2el_ms": {
+    "0": 285869.486591,
+    "1": 298074.984016,
+    "2": 417355.066884
+   },
+   "vllm_version": "0.19.0"
+  }
+ },
+ "scorer_version": 2,
+ "built_from": {
+  "VibeThinker-1.5B": "aime2x_train_vibe",
+  "Qwen3-30B-A3B": "aime2x_train_q30b"
+ }
+}

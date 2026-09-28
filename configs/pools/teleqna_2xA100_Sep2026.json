@@ -1,0 +1,13 @@
+{
+ "name": "teleqna_stats_2xA100_Sep2026",
+ "_note": "Per-cluster training statistics for the TeleQnA four-model pool, measured on 2 x A100 (tensor parallel 2) at concurrency 32 under vLLM 0.19.0. Gemma4-E2B is Pareto-dominated under TPOT. Fitted on its own costs: `cre fit --stats configs/teleqna_stats_2xA100_Sep2026.json --budget 15`.",
+ "basis": "2 x A100 SXM 80 GB (tensor parallel 2), concurrency 32",
+ "vllm_version": "0.19.0",
+ "error_tol": 0.001,
+ "models": {
+  "Qwen3-4B": "tq2x_train_q4bi",
+  "Gemma4-E2B": "tq2x_train_e2b",
+  "Gemma4-E4B": "tq2x_train_e4b",
+  "Gemma4-26B": "tq2x_train_26b"
+ }
+}

@@ -1,0 +1,11 @@
+{
+ "name": "aime_stats_2xA100_Sep2026",
+ "_note": "Per-cluster training statistics for the AIME 1983-2023 pool, measured on 2 x A100 (tensor parallel 2) at concurrency 32 under vLLM 0.19.0. Five runs, errors regraded from full_output. Fitted on its own costs: `cre fit --stats configs/aime_stats_2xA100_Sep2026.json --budget 20`.",
+ "basis": "2 x A100 SXM 80 GB (tensor parallel 2), concurrency 32",
+ "vllm_version": "0.19.0",
+ "error_tol": 0.001,
+ "models": {
+  "VibeThinker-1.5B": "aime2x_train_vibe",
+  "Qwen3-30B-A3B": "aime2x_train_q30b"
+ }
+}

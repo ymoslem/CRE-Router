@@ -727,3 +727,42 @@ class TestTeleMathTwoCards(TestTeleMath):
         models, _ = models_from_stats(stats, "tpot")
         _, dropped = pareto_prune(models)
         assert [m.name for m in dropped] == ["Gemma4-E4B"]
+
+
+class TestTwoCardsAimeTeleQnA:
+    """AIME and TeleQnA on 2 x A100, each fitted on its own two-card costs.
+
+    The one-card budgets stop binding on two cards (30 ms buys Qwen3-30B on
+    every AIME cluster, 20 ms buys Gemma4-26B on both TeleQnA clusters), so
+    the two-card systems use their own budgets, 20 ms and 15 ms.
+    """
+
+    def _fit(self, config, budget):
+        stats = json.loads((CONFIGS / config).read_text())
+        models, sizes = models_from_stats(stats, "tpot")
+        return select_lambda(models, sizes, budget, error_tol_from_stats(stats))
+
+    def test_aime_20ms(self):
+        sel = self._fit("aime_stats_2xA100_Sep2026.json", 20.0)
+        assert sel.region.assignment == {"0": Q, "1": V, "2": Q}
+        assert sel.region.lam_min == pytest.approx(0.057, abs=5e-4)
+        assert sel.accuracy == pytest.approx(0.918, abs=5e-4)
+
+    def test_aime_30ms_is_always_strong(self):
+        sel = self._fit("aime_stats_2xA100_Sep2026.json", 30.0)
+        assert set(sel.region.assignment.values()) == {Q}
+
+    def test_teleqna_15ms(self):
+        sel = self._fit("teleqna_stats_2xA100_Sep2026.json", 15.0)
+        assert sel.region.assignment == {"0": "Qwen3-4B", "1": "Gemma4-26B"}
+        assert sel.accuracy == pytest.approx(0.719, abs=5e-4)
+
+    def test_teleqna_20ms_is_always_strong(self):
+        sel = self._fit("teleqna_stats_2xA100_Sep2026.json", 20.0)
+        assert set(sel.region.assignment.values()) == {"Gemma4-26B"}
+
+    def test_teleqna_prunes_e2b_only(self):
+        stats = json.loads((CONFIGS / "teleqna_stats_2xA100_Sep2026.json").read_text())
+        models, _ = models_from_stats(stats, "tpot")
+        _, dropped = pareto_prune(models)
+        assert [m.name for m in dropped] == ["Gemma4-E2B"]

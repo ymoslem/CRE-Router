@@ -157,7 +157,9 @@ def cmd_compose(args: argparse.Namespace) -> None:
         load = dataset_loader(args.dataset)
     else:
         load = lambda tag: load_capture(tag, args.captures)  # noqa: E731
-    probs = load_accept_probs(args.probs, args.probs_source)
+    if routing.gated and not args.probs:
+        raise SystemExit("this routing gates clusters, so it needs --probs")
+    probs = load_accept_probs(args.probs, args.probs_source) if args.probs else {}
     result = compose(routing, load, probs)
     rows = (("Stage 1", result.stage1), ("Stage 1 + 2", result.stage1plus2))
     if args.json:
@@ -542,8 +544,9 @@ def main(argv: list[str] | None = None) -> None:
     src.add_argument("--captures", help="directory of raw captures, as cre evaluate saves them")
     src.add_argument("--dataset", help="download of the released captures dataset "
                                        "(needs the data extra)")
-    p.add_argument("--probs", required=True,
-                   help="accept probabilities: a JSONL dump, or the scores dataset's parquet")
+    p.add_argument("--probs",
+                   help="accept probabilities: a JSONL dump, or the scores dataset's parquet; "
+                        "needed only when the routing gates a cluster")
     p.add_argument("--probs-source", help="with a parquet --probs, the source_file to use")
     p.add_argument("--json", action="store_true", help="print JSON instead of a table")
     p.set_defaults(func=cmd_compose)
