@@ -19,7 +19,7 @@ you point them at a GPU/server via environment variables, e.g.:
 
 ```bash
 # QE classifier load + predict
-CRE_TEST_QE_CHECKPOINT=ymoslem/ModernBERT-base-AIME-1983-2023-instruct-qe-classifier-binary-10ep-lr5e-05 \
+CRE_TEST_QE_CHECKPOINT=ymoslem/ModernBERT-base-AIME-24-25-26-router-qe-binary-vibethinker1.5b-5runs_1eval-10ep-lr5e-05 \
   pytest -m integration
 # vLLM measurement (needs a running `vllm serve <model>`)
 CRE_TEST_VLLM_MODEL=WeiboAI/VibeThinker-1.5B pytest -m integration

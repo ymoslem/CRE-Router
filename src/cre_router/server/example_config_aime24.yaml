@@ -1,8 +1,9 @@
-# Example serving config for the paper's two-model AIME pool.
+# Example serving config for the paper's AIME system on 1 x A100.
 #
 # Prerequisites:
 #   1. `cre cluster` and `cre fit` have produced artifacts/aime/
-#      (centroids.npy + router.json with the routing table and lambda*)
+#      (centroids.npy + router.json with the routing table and lambda*):
+#      cre fit --stats configs/aime_stats_1xA100_Sep2026.json --budget 30 --output artifacts/aime
 #   2. One vLLM server per model. --max-model-len must cover input + the
 #      40,960-token AIME generation, or long chains of thought get truncated:
 #      vllm serve WeiboAI/VibeThinker-1.5B              --port 8001 --max-model-len 42000
@@ -36,7 +37,7 @@ qe:
   enabled: true
   classifiers:
     VibeThinker-1.5B:
-      checkpoint: ymoslem/ModernBERT-base-AIME-1983-2023-instruct-qe-classifier-binary-10ep-lr5e-05
+      checkpoint: ymoslem/ModernBERT-base-AIME-24-25-26-router-qe-binary-vibethinker1.5b-5runs_1eval-10ep-lr5e-05
       base_tokenizer: answerdotai/ModernBERT-base
       accept_threshold: 0.5
       max_length: 4096

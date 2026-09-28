@@ -519,7 +519,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     p.add_argument("--stats", required=True,
                    help="cascade stats JSON with assignment and escalations "
-                        "(see configs/*_cascade_test.json)")
+                        "(see configs/*_cascade_test_*.json)")
     p.set_defaults(func=cmd_cascade)
 
     p = sub.add_parser(
