@@ -225,13 +225,18 @@ and config the same way once you see the shape of it.
    table, $\lambda^*$, and the escalation ladder are read from the artifacts and
    the arithmetic, never set by hand. Point
    [`example_config_aime24.yaml`](src/cre_router/server/example_config_aime24.yaml)
-   at your backends and serve (a TeleQnA config,
-   [`example_config_teleqna.yaml`](src/cre_router/server/example_config_teleqna.yaml),
-   is also provided):
+   at your backends and serve:
 
    ```bash
    cre serve --config example_config_aime24.yaml
    ```
+
+   TeleQnA and TeleMath configs,
+   [`example_config_teleqna.yaml`](src/cre_router/server/example_config_teleqna.yaml)
+   and [`example_config_telemath.yaml`](src/cre_router/server/example_config_telemath.yaml),
+   are also provided. The TeleMath one serves the E2EL routing. The TPOT routings
+   need an escalation target per cluster and Gemma 4's thinking switch, which
+   `cre serve` does not support yet.
 
 4. Send a standard chat-completions request to the router on port 4000, not to
    a vLLM backend. The endpoint is OpenAI-compatible, so an existing client
@@ -371,7 +376,8 @@ cre-router/
 │       ├── cascade_router.py    Stage 1 routing + Stage 2 escalation ladder
 │       ├── app.py               HTTP endpoint, /stats, decision log
 │       ├── example_config_aime24.yaml    serving config (AIME)
-│       └── example_config_teleqna.yaml   serving config (TeleQnA)
+│       ├── example_config_teleqna.yaml   serving config (TeleQnA)
+│       └── example_config_telemath.yaml  serving config (TeleMath, E2EL routing)
 ├── configs/                     per-cluster stats for `cre fit`
 │   ├── pools/                   pool specs for `cre stats`
 │   └── routings/                routing specs for `cre compose`

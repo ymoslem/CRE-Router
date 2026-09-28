@@ -339,13 +339,19 @@ cre qe-cascade --classifier <checkpoint> --generations <test_generations.jsonl> 
 
 ## Serving the paper's pools
 
-Two ready-made serving configs are provided:
-[`example_config_aime24.yaml`](src/cre_router/server/example_config_aime24.yaml) for the
-two-model AIME pool (VibeThinker-1.5B escalating to Qwen3-30B-A3B) and
-[`example_config_teleqna.yaml`](src/cre_router/server/example_config_teleqna.yaml)
-for the TeleQnA system (Gemma4-E4B escalating to Gemma4-26B), both on 1 x A100. Point each at your
-running vLLM servers and the released QE classifiers, then `cre serve
---config <file>`.
+Three ready-made serving configs are provided, all for 1 x A100:
+
+- [`example_config_aime24.yaml`](src/cre_router/server/example_config_aime24.yaml),
+  AIME at TPOT 30 ms, VibeThinker-1.5B escalating to Qwen3-30B-A3B;
+- [`example_config_teleqna.yaml`](src/cre_router/server/example_config_teleqna.yaml),
+  TeleQnA at TPOT 20 ms, Gemma4-E4B escalating to Gemma4-26B;
+- [`example_config_telemath.yaml`](src/cre_router/server/example_config_telemath.yaml),
+  TeleMath at E2EL 25 s, Gemma4-E2B escalating to Gemma4-26B.
+
+Point each at your running vLLM servers, then `cre serve --config <file>`. The
+TeleMath TPOT routings cannot be served yet: `cre serve` escalates along one
+ladder ordered by cost, so Gemma4-E2B would escalate to Gemma4-E4B-think rather
+than to Qwen3-30B, and it does not pass Gemma 4's thinking switch.
 
 ## Released artifacts
 

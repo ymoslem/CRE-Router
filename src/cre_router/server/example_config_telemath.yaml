@@ -1,0 +1,40 @@
+# Example serving config for the paper's TeleMath system on 1 x A100, E2EL routing.
+#
+# At B = 25 s under E2EL, `cre fit` routes C1 to Gemma4-E2B and the other three
+# clusters to Gemma4-26B (thinking off), so those are the two models to serve.
+# The escalation ladder is derived from the fitted stats: over the served models
+# it is Gemma4-E2B -> Gemma4-26B.
+#
+# Prerequisites:
+#   1. `cre cluster` (k = 4 on the TeleMath train split) and `cre fit` have
+#      produced artifacts/telemath/:
+#      cre fit --stats configs/telemath_stats_1xA100_Sep2026.json --budget 25000 \
+#          --cost-metric e2el --output artifacts/telemath
+#   2. One vLLM server per model. --max-model-len must cover input + the
+#      16,384-token non-thinking TeleMath generation:
+#      vllm serve google/gemma-4-E2B-it        --port 8001 --max-model-len 32768
+#      vllm serve google/gemma-4-26B-A4B-it    --port 8002 --max-model-len 32768
+#
+# Then: cre serve --config example_config_telemath.yaml
+
+artifacts_dir: artifacts/telemath
+
+# Keys must match the model names used in the routing table (`cre fit` stats).
+models:
+  Gemma4-E2B:
+    litellm_model: hosted_vllm/google/gemma-4-E2B-it
+    api_base: http://127.0.0.1:8001/v1
+  Gemma4-26B-A4B:
+    litellm_model: hosted_vllm/google/gemma-4-26B-A4B-it
+    api_base: http://127.0.0.1:8002/v1
+
+# Stage 2: escalate Gemma4-E2B's low-quality outputs to Gemma4-26B.
+qe:
+  enabled: true
+  classifiers:
+    Gemma4-E2B:
+      checkpoint: ymoslem/ModernBERT-base-TeleMath-router-qe-classifier-binary-10ep-lr2e-05-e2b-5runs
+      base_tokenizer: answerdotai/ModernBERT-base
+      accept_threshold: 0.5
+      max_length: 4096
+    # Gemma4-26B is the strongest served model, so it needs no classifier.
