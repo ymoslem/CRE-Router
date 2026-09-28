@@ -51,9 +51,13 @@ The full workflow is driven by the `cre` CLI, one command per step:
 `cre cluster` → `cre evaluate` → `cre fit` → `cre qe-train` → `cre qe-cascade` → `cre serve`
 
 Serving (`cre serve`) switches between the live vLLM backends through [LiteLLM](https://github.com/BerriAI/litellm).
-`cre cascade` sits outside this chain: it composes the Stage 1 + 2 system
-accuracy and latency offline from measured stats, and is not a prerequisite for
-serving.
+Three commands sit outside this chain and work offline, with no GPU.
+`cre stats` builds the stats file `cre fit` reads from saved captures.
+`cre compose` measures a routing's Stage 1 and Stage 1 + 2 accuracy, TPOT and
+E2EL on the batches that were served; use it for accurate results, and the
+paper's numbers come from it. `cre cascade` gives a quick estimate of the same
+from per-cluster averages, useful before the escalation batches have been
+served.
 
 The main commands and options are summarized in the following table. For full
 flags for any command, run:
@@ -69,27 +73,45 @@ cre <command> --help
 | `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^*$ under the cost budget | stats JSON, budget B | routing table and $\lambda^*$ in `router.json` | `--budget` (required), `--cost-metric`, `--error-tol`, `--output` |
 | `cre qe-train` | Fine-tunes ModernBERT-base as the accept/escalate QE classifier | HF dataset of model outputs with correctness labels | QE classifier checkpoint | `--train-split`, `--eval-split`, `--learning-rate`, `--max-length` |
 | `cre qe-cascade` | Replays the trained QE over an efficient model's saved generations, composing per-cluster cascade accuracy and escalation counts | generations JSONL, the strong model's outcomes, a QE checkpoint | cascade config for `cre cascade` | `--clusters`, `--accept-threshold` |
-| `cre cascade` | Composes Stage 1+2 system accuracy and latency, under TPOT and E2EL, from measured stats | cascade config | system accuracy, TPOT, E2EL | `--stats` |
+| `cre stats` | Rebuilds per-cluster stats from saved captures, regrading every answer | pool spec, captures directory or the released captures dataset | stats JSON for `cre fit` | `--pool`, `--captures`, `--dataset` |
+| `cre compose` | Measures a routing's Stage 1 and Stage 1 + 2 accuracy, TPOT and E2EL from the batches that served it | routing spec, captures, accept probabilities | accuracy, TPOT, E2EL, escalations per run | `--routing`, `--dataset`, `--probs`, `--json` |
+| `cre cascade` | Estimates Stage 1+2 system accuracy and latency, under TPOT and E2EL, from per-cluster stats | cascade config | system accuracy, TPOT, E2EL | `--stats` |
 | `cre serve` | Runs the live router: sends each incoming query to its cluster's assigned model, and escalates weak answers to a stronger model | serving config, running backends | live HTTP router on port 4000 | `--config`, `--port` |
 
 ## Installation
+
+From PyPI:
 
 ```bash
 pip install "cre-router[full]"
 ```
 
-This is the whole pipeline on one machine: clustering and routing, the
-cascade router, QE classifier training/evaluation, and vLLM for measurement
-and for hosting backend models. If you want a narrower install, pick from the
-extras below.
+From source, for changes not yet released:
+
+```bash
+pip install "cre-router[full] @ git+https://github.com/ymoslem/CRE-Router.git@main"
+```
+
+From a clone, to edit the code or to use the files in `configs/` and `data/`,
+which the wheel does not include:
+
+```bash
+git clone https://github.com/ymoslem/CRE-Router.git
+cd CRE-Router
+pip install -e ".[full]"
+```
+
+`full` installs the whole pipeline on one machine. For a narrower install, pick
+from the extras below.
 
 | Extra | Adds | For |
 |---|---|---|
-| (core) | numpy, scikit-learn, sentence-transformers, pyyaml, anyio | `cre cluster`, `cre fit` — always installed |
-| `serve` | + litellm, fastapi, uvicorn, httpx, torch, transformers | `cre serve` — the Stage 1 + Stage 2 cascade router (loads ModernBERT in-process) |
-| `qe` | + torch, transformers, datasets, accelerate | `cre qe-train`, `cre qe-eval` — train and evaluate the QE classifier |
-| `eval` | + vllm | `cre evaluate` — per-cluster measurement; also provides `vllm serve` for backends |
-| `full` | qe + serve + eval | the whole pipeline on one machine |
+| (core) | numpy, scikit-learn, sentence-transformers, pyyaml, anyio | `cre cluster`, `cre fit`, `cre cascade`; always installed |
+| `data` | + pyarrow | `cre stats`, `cre compose` on the released datasets |
+| `serve` | + litellm, fastapi, uvicorn, httpx, torch, transformers | `cre serve`, the Stage 1 + Stage 2 cascade router (loads ModernBERT in-process) |
+| `qe` | + torch, transformers, datasets, accelerate | `cre qe-train`, `cre qe-eval` |
+| `eval` | + vllm | `cre evaluate`; also provides `vllm serve` for backends |
+| `full` | data + qe + serve + eval | the whole pipeline on one machine |
 
 The vLLM backends the router talks to are separate processes started with
 `vllm serve <model>` (cf.
@@ -124,7 +146,7 @@ stats measured in the paper are checked in under
 without any GPU:
 
 ```bash
-cre fit --stats configs/aime_stats.json --budget 20
+cre fit --stats configs/aime_stats_1xA100_Sep2026.json --budget 30
 ```
 
 This prints the Pareto analysis, the $\lambda$ sweep (routing regions), and the
@@ -195,7 +217,7 @@ and config the same way once you see the shape of it.
    ```bash
    python data/download.py --dataset ymoslem/AIME-clustered --split train --output data/aime_train.jsonl
    cre cluster --input data/aime_train.jsonl --embeddings-field embeddings --output artifacts/aime
-   cre fit --stats configs/aime_stats.json --budget 20 --output artifacts/aime
+   cre fit --stats configs/aime_stats_1xA100_Sep2026.json --budget 30 --output artifacts/aime
    ```
 
 3. Write a serving config. It carries only deployment wiring — the model pool
@@ -261,12 +283,17 @@ the prompt, it cannot be served at all. Qwen3-8B on `aime` is exactly this, a
 entry then records `max_output_tokens`, because a capture taken at a lower cap is
 not comparable with the rest of the pool on either cost or accuracy.
 
-| task | temperature | top-p | max output tokens | prompt in the dataset |
-| --- | --- | --- | --- | --- |
-| `aime`, `telemath` | 0.6 | 0.95 | 40,960 | raw, templated at serve time |
-| `telemath_nothink` | 0.7 | 0.8 | 16,384 | raw, templated at serve time |
-| `teleqna` | 0.7 | 0.8 | 1,024 | raw, templated at serve time |
-| `telemath_gemma4` | 0.6 | 0.95 | 40,960 | pre-rendered, served verbatim |
+Sampling follows Qwen's recommended settings for thinking mode (temperature 0.6,
+top-p 0.95) and non-thinking mode (0.7, 0.8), with top-k 20 and min-p 0 in every
+task. They apply to every model a task serves for consistency, including Gemma 4, whose model
+card recommends temperature 1.0 and top-p 0.95.
+
+| task | mode | temperature | top-p | max output tokens | prompt in the dataset |
+| --- | --- | --- | --- | --- | --- |
+| `aime`, `telemath`, `teleqna_think` | thinking | 0.6 | 0.95 | 40,960 | raw, templated at serve time |
+| `telemath_gemma4` | thinking | 0.6 | 0.95 | 40,960 | pre-rendered, served verbatim |
+| `telemath_nothink` | non-thinking | 0.7 | 0.8 | 16,384 | raw, templated at serve time |
+| `teleqna` | non-thinking | 0.7 | 0.8 | 1,024 | raw, templated at serve time |
 
 Gemma 4's thinking switch is a chat-template keyword argument, and vLLM's
 benchmark loader does not forward it, so those prompts are rendered ahead of
@@ -295,11 +322,18 @@ throughout.
   (1 = accept, 0/2 = escalate). Matches the released `ymoslem/*-router` datasets.
 - **Model stats** (`cre fit`): JSON with `cluster_sizes`, an optional pool-level
   `error_tol`, and per-model `errors`
-  and `cluster_tpot_ms`; see [`configs/aime_stats.json`](configs/aime_stats.json).
+  and `cluster_tpot_ms`; see
+  [`configs/aime_stats_1xA100_Sep2026.json`](configs/aime_stats_1xA100_Sep2026.json).
   Fitting with `--cost-metric e2el` also needs `cluster_e2el_ms`, and `cre cascade`
   additionally needs `cluster_output_tokens` to charge a discarded efficient pass
-  against the delivered answer; see
-  [`configs/aime_cascade_test.json`](configs/aime_cascade_test.json).
+  against the delivered answer.
+- **Pool spec** (`cre stats`): JSON mapping each model name to its capture tag
+  under `models`, plus fields copied into the stats file (`error_tol`,
+  `vllm_version`); see [`configs/pools/`](configs/pools).
+- **Routing spec** (`cre compose`): JSON with `tiers` (model name to test
+  capture), `assign` (cluster to model), `gated` (cluster to escalation batch
+  stem, one batch `<stem>_r<run>` per run), `strong`, `tau` (default 0.5) and
+  `runs`; see [`configs/routings/`](configs/routings).
 - **Serving config** (`cre serve`): YAML; see
   [`example_config_aime24.yaml`](src/cre_router/server/example_config_aime24.yaml).
 
@@ -319,6 +353,13 @@ cre-router/
 │   ├── routing.py               Stage 1: cost-aware routing, Pareto, lambda*
 │   ├── evaluate.py              Stage 1: measure per-cluster accuracy and TPOT via vLLM
 │   ├── artifacts.py             load/save centroids + routing table
+│   ├── captures.py              read saved captures: regrade answers, join cost per request
+│   ├── stats.py                 per-cluster stats from captures (`cre stats`)
+│   ├── compose.py               Stage 1 and Stage 1 + 2 from served batches (`cre compose`)
+│   ├── cascade.py               Stage 1 + 2 estimate from per-cluster stats (`cre cascade`)
+│   ├── bootstrap.py             confidence intervals over questions and runs
+│   ├── throughput.py            whole-run and steady-state output throughput
+│   ├── baselines/               FrugalGPT and HybridLLM re-implementations
 │   ├── cli.py                   the `cre` entry point
 │   ├── textutils.py             shared text helpers (strip reasoning blocks)
 │   ├── qe/                      Stage 2: QE classifier
@@ -331,7 +372,9 @@ cre-router/
 │       ├── app.py               HTTP endpoint, /stats, decision log
 │       ├── example_config_aime24.yaml    serving config (AIME)
 │       └── example_config_teleqna.yaml   serving config (TeleQnA)
-├── configs/                     checked-in per-model stats for `cre fit`
+├── configs/                     per-cluster stats for `cre fit`
+│   ├── pools/                   pool specs for `cre stats`
+│   └── routings/                routing specs for `cre compose`
 ├── data/
 │   ├── download.py              fetch released datasets from the Hugging Face Hub
 │   ├── prep_qe.py               build QE train/test splits from generation logs
