@@ -24,14 +24,16 @@ pip install "cre-router[full]"
 ```
 
 `full` installs the whole pipeline on one machine. Narrower installs are
-available through the `serve`, `qe`, and `eval` extras; see the
+available through the `serve`, `qe`, `eval` and `data` extras; see the
 [installation guide](https://github.com/ymoslem/CRE-Router#installation).
 
 ## Usage
 
 The workflow is driven by the `cre` CLI, one stage per step:
 
-`cre cluster` → `cre evaluate` → `cre fit` → `cre qe-train` → `cre serve`
+`cre cluster` → `cre evaluate` → `cre fit` → `cre qe-train` → `cre qe-cascade` → `cre serve`
+
+Offline, from saved captures: `cre stats` → `cre fit` → `cre compose`.
 
 Run `cre <stage> --help` for options. Runnable end-to-end quickstarts (a
 no-GPU routing-table demo and a full serving walkthrough) are in the
