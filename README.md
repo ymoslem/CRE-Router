@@ -32,11 +32,11 @@ benchmark evaluation; no extra annotation is required.
 ### Choosing the cost metric
 
 Stage 1 scores each model with `Error(m, c) + lambda * Cost_norm(m)`, where `Cost` is
-either time per output token (`--cost-metric tpot` (the default), which reproduces
-the published results), or end-to-end request latency (`--cost-metric e2el`).
+either time per output token (`--cost-metric tpot`, the default) or end-to-end
+request latency (`--cost-metric e2el`).
 
-The two agree while pool members emit similar numbers of tokens, and diverge as
-soon as they do not. A reasoning model and a non-reasoning one can differ by less
+TPOT and E2EL rank the models the same way while pool members emit similar
+numbers of tokens, and diverge as soon as they do not. A reasoning model and a non-reasoning one can differ by less
 than a millisecond in TPOT while differing several-fold in E2EL, because
 `E2EL = TTFT + TPOT * L` and TPOT divides the output length `L` out. Use E2EL
 whenever the pool mixes thinking and non-thinking members, or verbose and brief

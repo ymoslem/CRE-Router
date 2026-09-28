@@ -506,8 +506,8 @@ def main(argv: list[str] | None = None) -> None:
              "prices each cluster on its own measurement and needs per-cluster costs",
     )
     p.add_argument("--cost-metric", choices=("tpot", "e2el"), default="tpot",
-                   help="measurement used as Cost: 'tpot' (default, reproduces the "
-                        "published results) or 'e2el' end-to-end request latency, "
+                   help="measurement used as Cost: 'tpot' (default) or 'e2el' "
+                        "end-to-end request latency, "
                         "needed when pool members differ in output length rather "
                         "than decode speed, such as a thinking/non-thinking pair")
     p.add_argument("--output", default=None, help="artifacts directory to update")
