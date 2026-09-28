@@ -52,6 +52,13 @@ jobs:
         with:
           name: dist
           path: dist/
-      - run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-from-tag
+      # A release written by hand before the tag is pushed keeps its notes and
+      # gets the packages attached, rather than failing on the duplicate.
+      - run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-from-tag
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
