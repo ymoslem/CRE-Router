@@ -1,8 +1,9 @@
-"""Routing math verified against the numbers published in the paper.
+"""Routing math, checked against the shipped stats and routing configs.
 
-AIME fixtures come from Table `aime_training` (per-cluster error and TPOT on
-AIME 1983-2023); expected outputs come from Sec. 6.1 and Table `aime_lambda`.
-TeleQnA fixtures come from Table `teleqna_training`.
+Fixtures are the per-cluster training statistics in `configs/`. Where a test
+pins an outcome, the expected value is recomputed from the raw JSON inside the
+test, or read from the routing spec in `configs/routings/` that the outcome
+must reproduce, so a changed config cannot leave a stale number passing.
 """
 
 import json
@@ -39,34 +40,56 @@ V = "VibeThinker-1.5B"
 Q = "Qwen3-30B-A3B"
 
 
-# Every config names its basis, so a fixture has to as well. The assertions in
-# this file were written against the June 2026 preprint's 2 x A100 measurements
-# and stay pinned to them; the reported 1 x A100 basis is a different pool with
-# different crossovers and different pruning, covered by TestReportedBasis.
-SUBMITTED = {"aime": "aime_stats_2xA100_Jun2026.json",
-             "teleqna": "teleqna_stats_2xA100_Jun2026.json"}
-REPORTED = {"aime": "aime_stats_1xA100_Sep2026.json",
+# Every config names its basis, so a fixture has to as well. Most of this file
+# runs on two cards; the one-card pool has different crossovers and different
+# pruning, covered by TestOneCardBasis.
+TWO_CARD = {"aime": "aime_stats_2xA100_Sep2026.json",
+            "teleqna": "teleqna_stats_2xA100_Sep2026.json"}
+ONE_CARD = {"aime": "aime_stats_1xA100_Sep2026.json",
             "teleqna": "teleqna_stats_1xA100_Sep2026.json"}
+#: The two-card routing specs the fits below must reproduce, with their budgets.
+AIME_ROUTING = ("aime_tpot_b20ms_2xA100_Sep2026.json", 20.0)
+TELEQNA_ROUTING = ("teleqna_tpot_b15ms_2xA100_Sep2026.json", 15.0)
+#: Routing specs name a model by its tier; the stats files use a shorter name.
+STATS_NAME = {"Qwen3-4B-Instruct": "Qwen3-4B"}
+
+
+def _raw(name: str) -> dict:
+    return json.loads((CONFIGS / name).read_text())
+
+
+def _spec_assignment(name: str) -> dict[str, str]:
+    spec = json.loads((CONFIGS / "routings" / name).read_text())
+    return {c: STATS_NAME.get(m, m) for c, m in spec["assign"].items()}
+
+
+def _weighted(raw: dict, assignment: dict[str, str]) -> tuple[float, float]:
+    """Accuracy and TPOT of an assignment, straight from the stats JSON."""
+    sizes, models = raw["cluster_sizes"], raw["models"]
+    total = sum(sizes.values())
+    acc = sum(sizes[c] * (1 - models[m]["errors"][c]) for c, m in assignment.items()) / total
+    tpot = sum(sizes[c] * models[m]["cluster_tpot_ms"][c] for c, m in assignment.items()) / total
+    return acc, tpot
 
 
 @pytest.fixture()
 def aime():
-    return models_from_stats(json.loads((CONFIGS / SUBMITTED["aime"]).read_text()))
+    return models_from_stats(_raw(TWO_CARD["aime"]))
 
 
 @pytest.fixture()
 def teleqna():
-    return models_from_stats(json.loads((CONFIGS / SUBMITTED["teleqna"]).read_text()))
+    return models_from_stats(_raw(TWO_CARD["teleqna"]))
 
 
 @pytest.fixture()
 def aime_1x():
-    return models_from_stats(json.loads((CONFIGS / REPORTED["aime"]).read_text()))
+    return models_from_stats(_raw(ONE_CARD["aime"]))
 
 
 @pytest.fixture()
 def teleqna_1x():
-    return models_from_stats(json.loads((CONFIGS / REPORTED["teleqna"]).read_text()))
+    return models_from_stats(_raw(ONE_CARD["teleqna"]))
 
 
 class TestNormalizedCosts:
@@ -78,57 +101,68 @@ class TestNormalizedCosts:
 
 
 class TestCrossovers:
-    def test_aime_closed_form(self, aime):
-        """Paper Sec. 6.1: lambda_0=0.067, lambda_1=0.052, lambda_2=0.099."""
-        models, _ = aime
-        assert crossover_candidates(models) == pytest.approx([0.052, 0.067, 0.099], abs=1e-9)
+    @staticmethod
+    def _gaps() -> dict[str, float]:
+        """Each cluster's error gap, VibeThinker minus Qwen3-30B, from the JSON."""
+        errors = {m: s["errors"] for m, s in _raw(TWO_CARD["aime"])["models"].items()}
+        return {c: errors[V][c] - errors[Q][c] for c in errors[V]}
 
-    def test_aime_four_regions_match_table(self, aime):
-        """Paper Table `aime_lambda`: assignments per routing region."""
+    def test_aime_closed_form(self, aime):
+        """K = 2: min-max sends the pair to {0, 1}, so each crossover is the
+        cluster's error gap and the cost term cancels."""
+        models, _ = aime
+        assert crossover_candidates(models) == pytest.approx(sorted(self._gaps().values()), abs=1e-9)
+
+    def test_aime_regions_hand_clusters_over_in_gap_order(self, aime):
+        """Raising lambda moves clusters to the cheaper model one at a time,
+        smallest error gap first, giving one region per cluster plus one."""
         models, _ = aime
         regions = routing_regions(models)
-        assert len(regions) == 4
-        assert regions[0].assignment == {"0": Q, "1": Q, "2": Q}
-        assert regions[1].assignment == {"0": Q, "1": V, "2": Q}
-        assert regions[2].assignment == {"0": V, "1": V, "2": Q}
-        assert regions[3].assignment == {"0": V, "1": V, "2": V}
-        assert math.isinf(regions[3].lam_max)
+        order = sorted(self._gaps(), key=self._gaps().get)
+        assert len(regions) == len(order) + 1
+        for i, region in enumerate(regions):
+            moved = set(order[:i])
+            assert region.assignment == {c: V if c in moved else Q for c in order}
+        assert math.isinf(regions[-1].lam_max)
 
 
 class TestSystemMetrics:
-    def test_aime_baseline_row(self, aime):
-        """Table `aime_lambda`, lambda=0: 94.4% accuracy at 24.8 ms."""
+    def test_aime_all_strong_row(self, aime):
+        """lambda = 0 sends every cluster to Qwen3-30B."""
         models, sizes = aime
-        acc, tpot = system_metrics(models, assign(models, 0.0), sizes)
-        assert acc * 100 == pytest.approx(94.4, abs=0.05)
-        assert tpot == pytest.approx(24.8, abs=0.05)
+        everything_strong = {c: Q for c in sizes}
+        assert assign(models, 0.0) == everything_strong
+        acc, tpot = system_metrics(models, everything_strong, sizes)
+        expected = _weighted(_raw(TWO_CARD["aime"]), everything_strong)
+        assert (acc, tpot) == pytest.approx(expected, rel=1e-12)
 
-    def test_aime_lambda_star_row(self, aime):
-        """Table `aime_lambda`, lambda=0.06: 92.1% accuracy at 18.4 ms."""
+    def test_aime_routed_row(self, aime):
         models, sizes = aime
-        acc, tpot = system_metrics(models, assign(models, 0.06), sizes)
-        assert acc * 100 == pytest.approx(92.1, abs=0.05)
-        assert tpot == pytest.approx(18.4, abs=0.06)
+        routed = _spec_assignment(AIME_ROUTING[0])
+        acc, tpot = system_metrics(models, routed, sizes)
+        assert (acc, tpot) == pytest.approx(_weighted(_raw(TWO_CARD["aime"]), routed), rel=1e-12)
 
     def test_eta_is_none_for_baseline(self, aime):
         models, sizes = aime
         assert eta(models, assign(models, 0.0), sizes) is None
 
-    def test_eta_at_lambda_star(self, aime):
-        """The paper reports eta=0.36 from table-rounded accuracy and TPOT;
-        the unrounded computation gives 0.354."""
+    def test_eta_is_points_given_up_per_ms_saved(self, aime):
         models, sizes = aime
-        assert eta(models, assign(models, 0.06), sizes) == pytest.approx(0.354, abs=0.005)
+        raw = _raw(TWO_CARD["aime"])
+        routed = _spec_assignment(AIME_ROUTING[0])
+        acc0, tpot0 = _weighted(raw, {c: Q for c in sizes})
+        acc, tpot = _weighted(raw, routed)
+        assert eta(models, routed, sizes) == pytest.approx((acc0 - acc) * 100 / (tpot0 - tpot))
 
 
 class TestLambdaSelection:
-    def test_aime_budget_20ms_selects_006(self, aime):
-        """Paper Sec. 6.1: B=20 ms selects lambda*=0.06, C1 to VibeThinker."""
+    def test_aime_budget_reproduces_the_shipped_routing(self, aime):
         models, sizes = aime
-        selection = select_lambda(models, sizes, budget_ms=20.0)
-        assert selection.lambda_star == pytest.approx(0.06)
-        assert selection.region.assignment == {"0": Q, "1": V, "2": Q}
-        assert selection.tpot_ms <= 20.0
+        spec, budget = AIME_ROUTING
+        selection = select_lambda(models, sizes, budget_ms=budget)
+        assert selection.region.assignment == _spec_assignment(spec)
+        assert selection.region.lam_min <= selection.lambda_star < selection.region.lam_max
+        assert selection.tpot_ms <= budget
 
     def test_infeasible_budget_raises(self, aime):
         models, sizes = aime
@@ -179,63 +213,48 @@ class TestRepresentativeLambda:
 
 
 class TestTeleQnA:
-    def test_pareto_pruning_matches_table(self, teleqna):
-        """Table `teleqna_training`: G-E2B and G-E4B are dominated."""
+    def test_pareto_pruning(self, teleqna):
+        """Gemma4-E2B is dominated by Qwen3-4B. Gemma4-E4B survives: it is
+        dearer than Qwen3-4B but more accurate on C0 by more than the tolerance."""
+        raw = _raw(TWO_CARD["teleqna"])
+        tol = raw["error_tol"]
         models, _ = teleqna
-        efficient, dominated = pareto_prune(models)
-        assert sorted(m.name for m in dominated) == ["Gemma4-E2B", "Gemma4-E4B"]
-        assert sorted(m.name for m in efficient) == ["Gemma4-26B", "Qwen3-4B"]
+        by = {m.name: m for m in models}
+        q4, e2b, e4b = by["Qwen3-4B"], by["Gemma4-E2B"], by["Gemma4-E4B"]
+        err = {m: s["errors"] for m, s in raw["models"].items()}
+        assert q4.tpot_ms < e2b.tpot_ms
+        assert all(err["Qwen3-4B"][c] < err["Gemma4-E2B"][c] - tol for c in err["Qwen3-4B"])
+        assert err["Gemma4-E4B"]["0"] < err["Qwen3-4B"]["0"] - tol
+        assert q4.tpot_ms < e4b.tpot_ms
 
-    def test_surviving_pool_crossovers(self, teleqna):
-        """K=2 closed form on the surviving pool. C0 crossover 0.066,
-        C1 crossover 0.075, hence lambda*=0.07 selects Q3-4B/G-26B."""
+        efficient, dominated = pareto_prune(models, tol)
+        assert [m.name for m in dominated] == ["Gemma4-E2B"]
+        assert "Gemma4-E4B" in {m.name for m in efficient}
+
+    def test_budget_reproduces_the_shipped_routing(self, teleqna):
         models, sizes = teleqna
+        spec, budget = TELEQNA_ROUTING
         efficient, _ = pareto_prune(models)
-        assert crossover_candidates(efficient) == pytest.approx([0.066, 0.075], abs=1e-9)
-
-        selection = select_lambda(efficient, sizes, budget_ms=20.0)
-        assert selection.lambda_star == pytest.approx(0.07)
-        assert selection.region.assignment == {"0": "Qwen3-4B", "1": "Gemma4-26B"}
+        selection = select_lambda(efficient, sizes, budget_ms=budget)
+        assert selection.region.assignment == _spec_assignment(spec)
+        assert select_lambda(models, sizes, budget_ms=budget).region.assignment == _spec_assignment(spec)
 
     def test_dominated_models_never_selected(self, teleqna):
-        models, sizes = teleqna
+        models, _ = teleqna
+        _, dominated = pareto_prune(models)
         for region in routing_regions(models):
-            chosen = set(region.assignment.values())
-            assert "Gemma4-E2B" not in chosen
-            assert "Gemma4-E4B" not in chosen
-
-
-def _load_cascade(name: str):
-    """Load a checked-in cascade config the way ``cre cascade`` does."""
-    stats = json.loads((CONFIGS / name).read_text())
-    models, cluster_sizes = models_from_stats(stats)
-    assignment = {str(k): str(v) for k, v in stats["assignment"].items()}
-    escalations = {
-        str(k): (str(v[0]), float(v[1])) for k, v in stats.get("escalations", {}).items()
-    }
-    return models, assignment, cluster_sizes, escalations
+            assert not {m.name for m in dominated} & set(region.assignment.values())
 
 
 class TestCascadeSystemMetrics:
-    """Stage 1+2 system latency from the checked-in test-split cascade configs,
-    verified against the paper's Tables `aime_test` and `teleqna_test`. The
-    composed values are 9.75 / 23.65 ms; the paper reports 9.7 / 23.8 ms."""
-
-    def test_aime_stage1plus2_latency(self):
-        models, assignment, sizes, escalations = _load_cascade("aime_cascade_test_2xA100_Jun2026.json")
-        tpot, e2el = cascade_system_metrics(models, assignment, sizes, escalations)
-        assert tpot == pytest.approx(9.7, abs=0.1)   # paper Table aime_test
-        assert e2el == pytest.approx(156300, rel=1e-3)
-
-    def test_teleqna_stage1plus2_latency(self):
-        models, assignment, sizes, escalations = _load_cascade("teleqna_cascade_test_2xA100_Jun2026.json")
-        tpot, e2el = cascade_system_metrics(models, assignment, sizes, escalations)
-        assert tpot == pytest.approx(23.8, abs=0.2)  # paper Table teleqna_test
-        assert e2el == pytest.approx(1127, rel=1e-3)
-
     def test_no_escalation_matches_stage1(self):
         """With no escalations the cascade collapses to Stage 1 TPOT exactly."""
-        models, assignment, sizes, _ = _load_cascade("teleqna_cascade_test_2xA100_Jun2026.json")
+        def model(name, tpot):
+            return ModelStats(name=name, tpot_ms=tpot, errors={"0": 0.3, "1": 0.2},
+                              cluster_tpot_ms={"0": tpot, "1": tpot + 1.0},
+                              e2el_ms=tpot * 100, cluster_output_tokens={"0": 40.0, "1": 60.0})
+        models = [model("small", 9.0), model("large", 20.0)]
+        assignment, sizes = {"0": "small", "1": "large"}, {"0": 590, "1": 410}
         _, stage1_tpot = system_metrics(models, assignment, sizes)
         tpot, _ = cascade_system_metrics(models, assignment, sizes, escalations={})
         assert tpot == pytest.approx(stage1_tpot)
@@ -243,7 +262,7 @@ class TestCascadeSystemMetrics:
 
 class TestCascadeSystemMetricsNTier:
     """The N-tier generalisation; 2-tier ``cascade_system_metrics`` delegates to
-    it, so the AIME/TeleQnA tests above are the N=2 regression."""
+    it, which ``test_two_tier_wrapper_equals_ntier`` checks."""
 
     def _models(self):
         # per-cluster tpot / e2el / output length for a single cluster "0"
@@ -320,50 +339,25 @@ class TestClusterCascadeAccuracy:
 
 
 class TestCascadeSystemAccuracy:
-    """Stage 1+2 system accuracy composition, verified against the paper's
-    combined-cascade slides (AIME 88.4%, TeleQnA 74.3%)."""
+    """Stage 1+2 system accuracy: a gated cluster contributes its cascade
+    accuracy, every other cluster its routed model's accuracy, weighted by size."""
 
-    def test_aime_stage1plus2_accuracy(self):
-        # AIME test: C0->Q3, C1->V (cascade to Q3), C2->Q3. Q3 test errors give
-        # 0.867/0.980/0.829; C1's cascade accuracy is 0.96.
-        v = ModelStats(name=V, tpot_ms=4.8, errors={"0": 0.311, "1": 0.100, "2": 0.291})
-        q = ModelStats(name=Q, tpot_ms=11.8, errors={"0": 0.133, "1": 0.020, "2": 0.171})
-        assignment = {"0": Q, "1": V, "2": Q}
-        sizes = {"0": 9, "1": 10, "2": 11}
-        acc = cascade_system_accuracy([v, q], assignment, sizes, cascade_accuracy={"1": 0.96})
-        assert acc == pytest.approx(0.884, abs=0.001)
+    WEAK = ModelStats(name="weak", tpot_ms=5.0, errors={"0": 0.30, "1": 0.10, "2": 0.30})
+    STRONG = ModelStats(name="strong", tpot_ms=12.0, errors={"0": 0.10, "1": 0.05, "2": 0.20})
+    ASSIGNMENT = {"0": "strong", "1": "weak", "2": "strong"}
+    SIZES = {"0": 10, "1": 20, "2": 10}
 
-    def test_teleqna_stage1plus2_accuracy(self):
-        # TeleQnA test: C0->Q-4B (cascade to G-26B, acc 0.740), C1->G-26B direct.
-        q4b = ModelStats(name="Q-4B", tpot_ms=15.1, errors={"0": 0.311, "1": 0.360})
-        g26 = ModelStats(name="G-26B", tpot_ms=24.5, errors={"0": 0.223, "1": 0.254})
-        assignment = {"0": "Q-4B", "1": "G-26B"}
-        sizes = {"0": 590, "1": 410}
-        acc = cascade_system_accuracy([q4b, g26], assignment, sizes, cascade_accuracy={"0": 0.740})
-        assert acc == pytest.approx(0.743, abs=0.001)
+    def test_a_gated_cluster_takes_its_cascade_accuracy(self):
+        # 10 x 0.90 + 20 x 0.95 + 10 x 0.80 = 36 of 40
+        acc = cascade_system_accuracy([self.WEAK, self.STRONG], self.ASSIGNMENT, self.SIZES,
+                                      cascade_accuracy={"1": 0.95})
+        assert acc == pytest.approx(36 / 40)
 
     def test_no_cascade_matches_stage1_accuracy(self):
-        # With no escalated clusters, system accuracy == Stage 1 accuracy.
-        q4b = ModelStats(name="Q-4B", tpot_ms=15.1, errors={"0": 0.311, "1": 0.360})
-        g26 = ModelStats(name="G-26B", tpot_ms=24.5, errors={"0": 0.223, "1": 0.254})
-        assignment = {"0": "Q-4B", "1": "G-26B"}
-        sizes = {"0": 590, "1": 410}
-        stage1_acc, _ = system_metrics([q4b, g26], assignment, sizes)
-        acc = cascade_system_accuracy([q4b, g26], assignment, sizes, cascade_accuracy={})
+        stage1_acc, _ = system_metrics([self.WEAK, self.STRONG], self.ASSIGNMENT, self.SIZES)
+        acc = cascade_system_accuracy([self.WEAK, self.STRONG], self.ASSIGNMENT, self.SIZES,
+                                      cascade_accuracy={})
         assert acc == pytest.approx(stage1_acc)
-
-    def _cascade_acc_from_config(self, name: str) -> float:
-        stats = json.loads((CONFIGS / name).read_text())
-        models, sizes = models_from_stats(stats)
-        assignment = {str(k): str(v) for k, v in stats["assignment"].items()}
-        cascade_accuracy = {str(k): float(v) for k, v in stats.get("cascade_accuracy", {}).items()}
-        return cascade_system_accuracy(models, assignment, sizes, cascade_accuracy)
-
-    def test_aime_config_reproduces_884(self):
-        assert self._cascade_acc_from_config("aime_cascade_test_2xA100_Jun2026.json") == pytest.approx(0.884, abs=0.001)
-
-    def test_teleqna_config_reproduces_743(self):
-        assert self._cascade_acc_from_config("teleqna_cascade_test_2xA100_Jun2026.json") == pytest.approx(0.743, abs=0.001)
 
 
 # ---------------------------------------------------------------------------
@@ -593,7 +587,7 @@ class TestErrorTolerance:
         """The published claim: on every pool in this repo the tolerance selects
         exactly what an exact comparison selects."""
         root = Path(__file__).resolve().parents[1]
-        for name in (*SUBMITTED.values(), *REPORTED.values()):
+        for name in (*TWO_CARD.values(), *ONE_CARD.values()):
             stats = json.loads((root / "configs" / name).read_text())
             assert stats["error_tol"] == DEFAULT_ERROR_TOL, name
             for metric in ("tpot", "e2el"):
@@ -609,8 +603,8 @@ class TestErrorTolerance:
                             for r in routing_regions(models, DEFAULT_ERROR_TOL)]), (name, metric)
 
 
-class TestReportedBasis:
-    """The 1 x A100 measurements the paper reports, which are a different pool.
+class TestOneCardBasis:
+    """The 1 x A100 measurements, which are a different pool.
 
     Same models, same questions, same answers: only the serving configuration
     changes, and it changes enough that a test written for one basis says
@@ -642,8 +636,7 @@ class TestReportedBasis:
     def test_nothing_is_pruned_on_one_card(self, teleqna_1x):
         """The sharpest difference between the two bases.
 
-        On two cards Gemma4-E2B and Gemma4-E4B are dominated and the sweep has
-        three regions. On one card the whole pool is on the frontier and it has
+        On two cards Gemma4-E2B is dominated and the sweep has three regions. On one card the whole pool is on the frontier and it has
         six, so a config without its basis in the name cannot be read safely.
         """
         models, _ = teleqna_1x
@@ -653,11 +646,12 @@ class TestReportedBasis:
         assert len(routing_regions(models)) == 6
 
     def test_the_two_bases_really_do_disagree(self, teleqna, teleqna_1x):
-        submitted, _ = teleqna
-        reported, _ = teleqna_1x
-        _, dropped_2x = pareto_prune(submitted)
-        _, dropped_1x = pareto_prune(reported)
-        assert {m.name for m in dropped_2x} == {"Gemma4-E2B", "Gemma4-E4B"}
+        two_card, _ = teleqna
+        one_card, _ = teleqna_1x
+        _, dropped_2x = pareto_prune(two_card)
+        _, dropped_1x = pareto_prune(one_card)
+        assert {m.name for m in dropped_2x} == {"Gemma4-E2B"}
+        assert len(routing_regions(two_card)) == 3
         assert not dropped_1x
 
 

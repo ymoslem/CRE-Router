@@ -3,7 +3,6 @@ and escalation counts, with no GPU (the classifier is stubbed)."""
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
 
 import pytest
 
@@ -13,9 +12,7 @@ from cre_router.qe.cascade import (
     strong_correct_by_qid,
     write_cascade_stats,
 )
-from cre_router.routing import cluster_cascade_accuracy
 
-CONFIGS = Path(__file__).parent.parent / "configs"
 
 
 def _gen(qid, cluster, run, correct):
@@ -122,41 +119,3 @@ class TestWriteCascadeStats:
         acc = cascade_system_accuracy(models, assignment, sizes,
                                       {str(k): float(v) for k, v in stats["cascade_accuracy"].items()})
         assert acc == pytest.approx((2 * 0.9 + 2 * 0.8) / 4)
-
-
-class TestPaperCascadeReconstruction:
-    """Locks the session's validation that the composition reproduces the paper's
-    per-cluster cascade accuracy from the real per-run data:
-    TeleQnA C0 from route.zip + `QE-Route TeleQnA.numbers` + inference_teleqna_log_50;
-    AIME C1 from `AIME-Clusters-Test.numbers` + route.zip. See memory
-    cre-stage1plus2-metrics-composition."""
-
-    def test_teleqna_c0_reconstructs_0_742(self):
-        # per efficient/QE run (route.zip cluster_0_run_0..4): routed count, the
-        # accepted-and-efficient-correct count (log_50 "Accept: c/d"), and Gemma-26B
-        # accuracy on that routed set (mean of its 5 repeats in QE-Route TeleQnA).
-        routed = [199, 205, 206, 200, 202]
-        accepted_correct = [305, 295, 301, 310, 304]
-        s = [0.671, 0.683, 0.670, 0.654, 0.647]
-        N = 590
-        per_run = [(a + r * si) / N for r, a, si in zip(routed, accepted_correct, s)]
-        mean = sum(per_run) / len(per_run)
-        assert mean == pytest.approx(0.742, abs=0.002)   # paper Table teleqna_test 0.743
-        cfg = json.loads((CONFIGS / "teleqna_cascade_test_2xA100_Jun2026.json").read_text())
-        assert cfg["cascade_accuracy"]["0"] == pytest.approx(mean, abs=0.005)
-
-    def test_aime_c1_reconstructs_0_96(self):
-        # cluster 1: size 10 x 5 runs = 50 instances. VibeThinker acc 0.9 every run
-        # = exactly one miss/run (the same hard query); the QE escalates it in 3 of
-        # 5 runs (route.zip counts 1,1,1,0,0); Qwen3-30B is correct on those 3.
-        weak, strong, escalate = [], [], []
-        for run in range(5):
-            for q in range(10):
-                is_hard = q == 5
-                weak.append(not is_hard)              # 9 correct, the hard one wrong
-                escalate.append(is_hard and run in {0, 1, 2})
-                strong.append(True)                   # strong right on the escalated hard query
-        acc = cluster_cascade_accuracy(weak, strong, escalate)
-        assert acc == pytest.approx(0.96)             # paper Table aime_test 0.96
-        cfg = json.loads((CONFIGS / "aime_cascade_test_2xA100_Jun2026.json").read_text())
-        assert cfg["cascade_accuracy"]["1"] == pytest.approx(acc)

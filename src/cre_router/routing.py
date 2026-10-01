@@ -577,8 +577,7 @@ def cascade_system_accuracy(
     the strong model -- see ``cluster_cascade_accuracy``). A cluster absent from
     it routes entirely to its Stage 1 model and contributes ``1 - error`` for the
     assigned model, so ``system_metrics``' accuracy is the no-escalation special
-    case. Reproduces the paper's Stage 1+2 accuracy, 88.4% on AIME and 74.3% on
-    TeleQnA.
+    case.
     """
     by_name = {m.name: m for m in models}
     total = sum(cluster_sizes.values())

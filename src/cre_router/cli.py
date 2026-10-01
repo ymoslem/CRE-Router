@@ -534,8 +534,8 @@ def main(argv: list[str] | None = None) -> None:
         "use cre compose for measured results",
     )
     p.add_argument("--stats", required=True,
-                   help="cascade stats JSON with assignment and escalations "
-                        "(see configs/*_cascade_test_*.json)")
+                   help="cascade stats JSON with assignment and escalations, "
+                        "as completed by cre qe-cascade --out")
     p.set_defaults(func=cmd_cascade)
 
     p = command("stats", "build the per-cluster stats file cre fit reads, from saved captures")

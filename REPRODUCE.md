@@ -210,30 +210,9 @@ configuration that produced it, and there is no basis-less default:
 | --- | --- |
 | `*_1xA100_Sep2026.json` | 1 x A100 SXM 80 GB at concurrency 32, vLLM 0.19.0 |
 | `*_2xA100_Sep2026.json` | 2 x A100 SXM 80 GB (tensor parallel 2) at concurrency 32, vLLM 0.19.0 |
-| `*_2xA100_Jun2026.json` | 2 x A100, the June 2026 preprint, kept reproducible |
 
 The two Sep 2026 bases differ only in card count, so comparing them isolates
 what the hardware does to a routing.
-
-## Reproducing the June 2026 preprint
-
-The preprint's Stage 1 + 2 latency was composed from per-cluster test
-measurements and escalation counts rather than from served escalation batches.
-Its configs are kept so it stays reproducible:
-
-```bash
-cre fit --stats configs/aime_stats_2xA100_Jun2026.json --budget 20
-cre fit --stats configs/teleqna_stats_2xA100_Jun2026.json --budget 20
-cre cascade --stats configs/aime_cascade_test_2xA100_Jun2026.json
-cre cascade --stats configs/teleqna_cascade_test_2xA100_Jun2026.json
-```
-
-`cre cascade` gives 9.75 ms / 156,303 ms (AIME) and 23.65 ms / 1,127 ms
-(TeleQnA), matching the preprint's Stage 1+2 latency (9.7 and 23.8 ms) to
-within rounding. These archived configs record the vLLM version per model,
-because the preprint's TeleQnA pool served Qwen3-4B-Instruct under 0.17.0 and
-the three Gemmas under 0.19.0. The expected values are pinned in
-[`tests/test_routing.py`](tests/test_routing.py).
 
 ## Regenerating the data (GPU)
 
