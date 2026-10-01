@@ -9,7 +9,6 @@
   cre serve       run the cascade router (requires [serve])
   cre stats       build the stats file cre fit reads from saved captures
   cre compose     measure Stage 1 and Stage 1 + 2 on the batches that were served
-  cre cascade     estimate Stage 1 + 2 from per-cluster averages
 
 End to end: cluster -> evaluate (per model) -> fit -> qe-train -> qe-cascade -> serve.
 Offline, from saved captures: stats -> fit -> compose.
@@ -29,8 +28,6 @@ from cre_router.clustering import DEFAULT_EMBEDDING_MODEL
 from cre_router.evaluate import TASKS
 from cre_router.textutils import HelpFormatter
 from cre_router.routing import (
-    cascade_system_accuracy,
-    cascade_system_metrics,
     COST_CONDITIONING,
     DEFAULT_COST_CONDITIONING,
     error_tol_from_stats,
@@ -200,37 +197,6 @@ def cmd_stats(args: argparse.Namespace) -> None:
     print(f"wrote {out}: {len(stats['models'])} models, clusters {stats['cluster_sizes']}")
 
 
-def cmd_cascade(args: argparse.Namespace) -> None:
-    stats = json.loads(Path(args.stats).read_text())
-    models, cluster_sizes = models_from_stats(stats)
-    assignment = {str(k): str(v) for k, v in stats["assignment"].items()}
-    escalations = {
-        str(k): (str(v[0]), float(v[1])) for k, v in stats.get("escalations", {}).items()
-    }
-    tpot, e2el = cascade_system_metrics(models, assignment, cluster_sizes, escalations)
-    # Per-cluster cascade accuracy (efficient outputs gated by the QE classifier,
-    # rejects escalated to the strong model), produced by the QE cascade step.
-    # Clusters absent route entirely to their Stage 1 model.
-    cascade_accuracy = {str(k): float(v) for k, v in stats.get("cascade_accuracy", {}).items()}
-
-    clusters = sorted(cluster_sizes)
-    print(f"Stage 1+2 cascade over clusters {clusters}:")
-    for c in clusters:
-        line = f"  C{c} ({int(cluster_sizes[c])} queries) -> {assignment[c]}"
-        if c in escalations:
-            model, count = escalations[c]
-            line += f", escalate {count:g} -> {model}"
-        if c in cascade_accuracy:
-            line += f"  (cascade acc {cascade_accuracy[c]:.3f})"
-        print(line)
-
-    stage1_acc, _ = system_metrics(models, assignment, cluster_sizes)
-    system_acc = cascade_system_accuracy(models, assignment, cluster_sizes, cascade_accuracy)
-    print(f"\n  system accuracy: {system_acc:.3f}  (Stage 1 alone: {stage1_acc:.3f})")
-    print(f"  system TPOT:     {tpot:.2f} ms")
-    print(f"  system E2EL:     {e2el:.0f} ms")
-
-
 def cmd_evaluate(args: argparse.Namespace) -> None:
     from cre_router.evaluate import (
         cluster_sizes,
@@ -378,7 +344,6 @@ def cmd_qe_cascade(args: argparse.Namespace) -> None:
         compose_cascade,
         run_qe,
         strong_correct_by_qid,
-        write_cascade_stats,
     )
 
     generations = _read_jsonl(Path(args.generations))
@@ -405,9 +370,6 @@ def cmd_qe_cascade(args: argparse.Namespace) -> None:
             f"  C{cluster} (n={r['n']}): cascade acc {r['cascade_accuracy']:.3f}, "
             f"escalate {r['escalations']:g}/run"
         )
-    if args.out:
-        write_cascade_stats(args.out, args.strong_model, report)
-        print(f"\nUpdated {args.out} (escalations + cascade_accuracy); run `cre cascade --stats {args.out}`")
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
@@ -528,16 +490,6 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--output", default=None, help="artifacts directory to update")
     p.set_defaults(func=cmd_fit)
 
-    p = command(
-        "cascade",
-        "estimate Stage 1 + 2 accuracy, TPOT and E2EL from per-cluster averages; "
-        "use cre compose for measured results",
-    )
-    p.add_argument("--stats", required=True,
-                   help="cascade stats JSON with assignment and escalations, "
-                        "as completed by cre qe-cascade --out")
-    p.set_defaults(func=cmd_cascade)
-
     p = command("stats", "build the per-cluster stats file cre fit reads, from saved captures")
     p.add_argument("--pool", required=True, help="pool spec JSON (see configs/pools/)")
     src = p.add_mutually_exclusive_group(required=True)
@@ -589,7 +541,6 @@ def main(argv: list[str] | None = None) -> None:
                    help="strong model's *_outcomes.jsonl or *_generations.jsonl (qid, correct)")
     p.add_argument("--strong-model", required=True, help="strong model name recorded in the escalations")
     p.add_argument("--clusters", default=None, help="comma-separated clusters to cascade (default: all present)")
-    p.add_argument("--out", default=None, help="cascade stats JSON to update in place with the Stage 2 fields")
     p.add_argument("--base-tokenizer", default=None,
                    help="defaults to the checkpoint itself, which ships its own tokenizer; "
                         "give a base model id only for a checkpoint saved without one")

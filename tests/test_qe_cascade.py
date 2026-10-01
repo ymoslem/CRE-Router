@@ -1,7 +1,6 @@
 """Stage 1+2 cascade evaluation: QE decisions -> per-cluster cascade accuracy
 and escalation counts, with no GPU (the classifier is stubbed)."""
 
-import json
 from dataclasses import dataclass
 
 import pytest
@@ -10,9 +9,7 @@ from cre_router.qe.cascade import (
     compose_cascade,
     run_qe,
     strong_correct_by_qid,
-    write_cascade_stats,
 )
-
 
 
 def _gen(qid, cluster, run, correct):
@@ -88,34 +85,3 @@ class TestRunQe:
             {"prompt": "q1", "full_output": "... drop", "num_tokens": 5, "cluster": 0, "run": 0, "qid": "1", "correct": False},
         ]
         assert run_qe(Stub(), gens, batch_size=1) == [False, True]  # keep->accept->no escalate; drop->route
-
-
-class TestWriteCascadeStats:
-    def test_merges_into_routing_json_and_feeds_cre_cascade(self, tmp_path):
-        from cre_router.routing import (
-            cascade_system_accuracy,
-            models_from_stats,
-        )
-
-        # a routing-side cascade config, no Stage 2 fields yet
-        cfg = tmp_path / "cascade.json"
-        cfg.write_text(json.dumps({
-            "cluster_sizes": {"0": 2, "1": 2},
-            "assignment": {"0": "weak", "1": "strong"},
-            "models": {
-                "weak": {"errors": {"0": 0.5, "1": 0.5}, "cluster_tpot_ms": {"0": 10.0, "1": 10.0}},
-                "strong": {"errors": {"0": 0.1, "1": 0.2}, "cluster_tpot_ms": {"0": 20.0, "1": 20.0}},
-            },
-        }))
-        report = {"0": {"cascade_accuracy": 0.9, "escalations": 1.0, "n": 4}}
-        write_cascade_stats(cfg, "strong", report)
-
-        stats = json.loads(cfg.read_text())
-        assert stats["escalations"]["0"] == ["strong", 1.0]
-        assert stats["cascade_accuracy"]["0"] == 0.9
-        # cre cascade composition: C0 cascade 0.9, C1 direct = strong 1-0.2=0.8
-        models, sizes = models_from_stats(stats)
-        assignment = {str(k): str(v) for k, v in stats["assignment"].items()}
-        acc = cascade_system_accuracy(models, assignment, sizes,
-                                      {str(k): float(v) for k, v in stats["cascade_accuracy"].items()})
-        assert acc == pytest.approx((2 * 0.9 + 2 * 0.8) / 4)

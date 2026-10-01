@@ -1,12 +1,10 @@
 """Per-request Stage 1 + 2 accounting, priced on measured latencies.
 
-:func:`~cre_router.routing.cascade_system_metrics` answers the aggregate
-question: given each model's mean cost and how many queries escalate, what does
-the system cost? That is enough to choose an operating point. It is not enough
-to *report* one, because a mean over the whole pool cannot say what an escalated
-query actually waited, and cannot carry a confidence interval.
+A mean cost per model and an escalation count are enough to choose an operating
+point, but not to *report* one: a mean over the whole pool cannot say what an
+escalated query actually waited, and cannot carry a confidence interval.
 
-This module does the per-request version. Every query is priced on the tiers it
+This module prices each request instead. Every query is priced on the tiers it
 really ran, from the vLLM per-request record, and the result is a grid rather
 than a scalar so a paired bootstrap has something to resample.
 

@@ -17,10 +17,6 @@ from cre_router.routing import (
     ModelStats,
     _nice_lambda,
     assign,
-    cascade_system_accuracy,
-    cascade_system_metrics,
-    cascade_system_metrics_ntier,
-    cluster_cascade_accuracy,
     crossover_candidates,
     dominates,
     error_tol_from_stats,
@@ -244,120 +240,6 @@ class TestTeleQnA:
         _, dominated = pareto_prune(models)
         for region in routing_regions(models):
             assert not {m.name for m in dominated} & set(region.assignment.values())
-
-
-class TestCascadeSystemMetrics:
-    def test_no_escalation_matches_stage1(self):
-        """With no escalations the cascade collapses to Stage 1 TPOT exactly."""
-        def model(name, tpot):
-            return ModelStats(name=name, tpot_ms=tpot, errors={"0": 0.3, "1": 0.2},
-                              cluster_tpot_ms={"0": tpot, "1": tpot + 1.0},
-                              e2el_ms=tpot * 100, cluster_output_tokens={"0": 40.0, "1": 60.0})
-        models = [model("small", 9.0), model("large", 20.0)]
-        assignment, sizes = {"0": "small", "1": "large"}, {"0": 590, "1": 410}
-        _, stage1_tpot = system_metrics(models, assignment, sizes)
-        tpot, _ = cascade_system_metrics(models, assignment, sizes, escalations={})
-        assert tpot == pytest.approx(stage1_tpot)
-
-
-class TestCascadeSystemMetricsNTier:
-    """The N-tier generalisation; 2-tier ``cascade_system_metrics`` delegates to
-    it, which ``test_two_tier_wrapper_equals_ntier`` checks."""
-
-    def _models(self):
-        # per-cluster tpot / e2el / output length for a single cluster "0"
-        eff = ModelStats(name="eff", tpot_ms=10.0, errors={"0": 0.5},
-                         cluster_tpot_ms={"0": 10.0}, e2el_ms=100.0,
-                         cluster_e2el_ms={"0": 100.0}, cluster_output_tokens={"0": 50.0})
-        mid = ModelStats(name="mid", tpot_ms=20.0, errors={"0": 0.3},
-                         cluster_tpot_ms={"0": 20.0}, e2el_ms=300.0,
-                         cluster_e2el_ms={"0": 300.0}, cluster_output_tokens={"0": 100.0})
-        strong = ModelStats(name="strong", tpot_ms=30.0, errors={"0": 0.1},
-                            cluster_tpot_ms={"0": 30.0}, e2el_ms=600.0,
-                            cluster_e2el_ms={"0": 600.0}, cluster_output_tokens={"0": 200.0})
-        return [eff, mid, strong]
-
-    def test_three_tier_hand_computed(self):
-        # reach [10,4,2]: 10 run eff, 4 escalate to mid, 2 further to strong.
-        # E2EL = 10*100 + 4*300 + 2*600 = 3400 -> /10 = 340
-        # TPOT: t0 6*(500/50)=60 ; t1 2*(2500/100)=50 ; t2 2*(8500/200)=85 -> 195/10 = 19.5
-        cascades = {"0": [("eff", 10), ("mid", 4), ("strong", 2)]}
-        tpot, e2el = cascade_system_metrics_ntier(self._models(), cascades, {"0": 10})
-        assert e2el == pytest.approx(340.0)
-        assert tpot == pytest.approx(19.5)
-
-    def test_single_tier_is_direct_assignment(self):
-        cascades = {"0": [("mid", 10)]}
-        tpot, e2el = cascade_system_metrics_ntier(self._models(), cascades, {"0": 10})
-        assert (tpot, e2el) == pytest.approx((20.0, 300.0))
-
-    def test_two_tier_wrapper_equals_ntier(self):
-        models = self._models()
-        sizes = {"0": 10}
-        direct = cascade_system_metrics_ntier(
-            models, {"0": [("eff", 10), ("strong", 4)]}, sizes
-        )
-        wrapped = cascade_system_metrics(
-            models, {"0": "eff"}, sizes, {"0": ("strong", 4)}
-        )
-        assert wrapped == pytest.approx(direct)
-
-    def test_rejects_increasing_reach(self):
-        with pytest.raises(ValueError, match="non-increasing"):
-            cascade_system_metrics_ntier(
-                self._models(), {"0": [("eff", 10), ("mid", 12)]}, {"0": 10}
-            )
-
-    def test_rejects_base_reach_mismatch(self):
-        with pytest.raises(ValueError, match="cluster size"):
-            cascade_system_metrics_ntier(
-                self._models(), {"0": [("eff", 8), ("mid", 4)]}, {"0": 10}
-            )
-
-
-class TestClusterCascadeAccuracy:
-    def test_per_query_composition(self):
-        # accept -> keep weak; escalate -> take strong. FP (escalated-correct) and
-        # FN (accepted-wrong) both handled by taking the actual per-query outcome.
-        weak = [True, True, False, False]
-        strong = [False, False, True, False]
-        escalate = [False, False, True, True]
-        # q0,q1 accepted+weak-correct; q2 escalated+strong-correct; q3 escalated+strong-wrong
-        assert cluster_cascade_accuracy(weak, strong, escalate) == pytest.approx(3 / 4)
-
-    def test_no_escalation_equals_weak(self):
-        weak = [True, False, True]
-        assert cluster_cascade_accuracy(weak, [False, False, False], [False, False, False]) == pytest.approx(2 / 3)
-
-    def test_misaligned_lengths_raise(self):
-        with pytest.raises(ValueError, match="align"):
-            cluster_cascade_accuracy([True], [True, False], [False, False])
-
-    def test_empty_raises(self):
-        with pytest.raises(ValueError, match="empty"):
-            cluster_cascade_accuracy([], [], [])
-
-
-class TestCascadeSystemAccuracy:
-    """Stage 1+2 system accuracy: a gated cluster contributes its cascade
-    accuracy, every other cluster its routed model's accuracy, weighted by size."""
-
-    WEAK = ModelStats(name="weak", tpot_ms=5.0, errors={"0": 0.30, "1": 0.10, "2": 0.30})
-    STRONG = ModelStats(name="strong", tpot_ms=12.0, errors={"0": 0.10, "1": 0.05, "2": 0.20})
-    ASSIGNMENT = {"0": "strong", "1": "weak", "2": "strong"}
-    SIZES = {"0": 10, "1": 20, "2": 10}
-
-    def test_a_gated_cluster_takes_its_cascade_accuracy(self):
-        # 10 x 0.90 + 20 x 0.95 + 10 x 0.80 = 36 of 40
-        acc = cascade_system_accuracy([self.WEAK, self.STRONG], self.ASSIGNMENT, self.SIZES,
-                                      cascade_accuracy={"1": 0.95})
-        assert acc == pytest.approx(36 / 40)
-
-    def test_no_cascade_matches_stage1_accuracy(self):
-        stage1_acc, _ = system_metrics([self.WEAK, self.STRONG], self.ASSIGNMENT, self.SIZES)
-        acc = cascade_system_accuracy([self.WEAK, self.STRONG], self.ASSIGNMENT, self.SIZES,
-                                      cascade_accuracy={})
-        assert acc == pytest.approx(stage1_acc)
 
 
 # ---------------------------------------------------------------------------

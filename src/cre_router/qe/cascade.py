@@ -2,8 +2,7 @@
 
 Runs the QE classifier over an efficient model's per-cluster generations,
 escalates the rejected outputs to the strong model, and composes the per-cluster
-cascade accuracy and escalation counts that ``cre cascade`` consumes
-(``routing.cascade_system_accuracy`` / ``cascade_system_metrics``).
+cascade accuracy and escalation counts that ``cre qe-cascade`` reports.
 
 The composition is split so the arithmetic is testable without a GPU:
 ``compose_cascade`` is a pure function over already-made accept/route decisions,
@@ -13,9 +12,7 @@ classifier. Requires the ``qe`` extra only for ``run_qe``.
 
 from __future__ import annotations
 
-import json
 from collections import defaultdict
-from pathlib import Path
 
 
 def strong_correct_by_qid(outcomes: list[dict]) -> dict[str, float]:
@@ -49,8 +46,7 @@ def compose_cascade(
     the efficient model's own correctness.
 
     Returns ``{cluster: {"cascade_accuracy", "escalations", "n"}}`` where
-    ``escalations`` is the mean number of escalated queries per run, the ``count``
-    that ``cascade_system_metrics`` charges (``direct = size - count``).
+    ``escalations`` is the mean number of escalated queries per run.
     """
     if len(escalate) != len(generations):
         raise ValueError(
@@ -102,20 +98,3 @@ def run_qe(classifier, generations: list[dict], batch_size: int = 32) -> list[bo
         ]
         escalate.extend(not d.accept for d in classifier.predict_batch(items))
     return escalate
-
-
-def write_cascade_stats(out_path: str | Path, strong_model: str, report: dict[str, dict]) -> None:
-    """Merge ``escalations`` and ``cascade_accuracy`` into a cascade stats JSON.
-
-    ``out_path`` must already hold the routing side (``assignment``,
-    ``cluster_sizes``, ``models``) as produced for ``cre cascade``; this adds the
-    Stage 2 fields per cluster in ``report`` and leaves the rest untouched.
-    """
-    path = Path(out_path)
-    stats = json.loads(path.read_text())
-    stats.setdefault("escalations", {})
-    stats.setdefault("cascade_accuracy", {})
-    for cluster, r in report.items():
-        stats["escalations"][cluster] = [strong_model, r["escalations"]]
-        stats["cascade_accuracy"][cluster] = r["cascade_accuracy"]
-    path.write_text(json.dumps(stats, indent=2) + "\n")

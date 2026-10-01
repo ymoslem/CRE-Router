@@ -51,13 +51,11 @@ The full workflow is driven by the `cre` CLI, one command per step:
 `cre cluster` → `cre evaluate` → `cre fit` → `cre qe-train` → `cre qe-cascade` → `cre serve`
 
 Serving (`cre serve`) switches between the live vLLM backends through [LiteLLM](https://github.com/BerriAI/litellm).
-Three commands sit outside this chain and work offline, with no GPU.
+Two commands sit outside this chain and work offline, with no GPU.
 `cre stats` builds the stats file `cre fit` reads from saved captures.
 `cre compose` measures a routing's Stage 1 and Stage 1 + 2 accuracy, TPOT and
 E2EL on the batches that were served; use it for accurate results, and the
-paper's numbers come from it. `cre cascade` gives a quick estimate of the same
-from per-cluster averages, useful before the escalation batches have been
-served.
+paper's numbers come from it.
 
 The main commands and options are summarized in the following table. For full
 flags for any command, run:
@@ -72,10 +70,9 @@ cre <command> --help
 | `cre evaluate` | Runs each model per cluster through vLLM's benchmark, scores answers, averages per-cluster error and TPOT. This is the slowest step; cost scales with model size, output length, and `--runs`, and it runs once per model. | dataset JSONL, a running vLLM server, fitted centroids | per-model entry in the stats JSON; raw runs under `results/` | `--runs`, `--concurrency`, `--save-generations`, `--artifacts` |
 | `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^*$ under the cost budget | stats JSON, budget B | routing table and $\lambda^*$ in `router.json` | `--budget` (required), `--cost-metric`, `--error-tol`, `--output` |
 | `cre qe-train` | Fine-tunes ModernBERT-base as the accept/escalate QE classifier | HF dataset of model outputs with correctness labels | QE classifier checkpoint | `--train-split`, `--eval-split`, `--learning-rate`, `--max-length` |
-| `cre qe-cascade` | Replays the trained QE over an efficient model's saved generations, composing per-cluster cascade accuracy and escalation counts | generations JSONL, the strong model's outcomes, a QE checkpoint | cascade config for `cre cascade` | `--clusters`, `--accept-threshold` |
+| `cre qe-cascade` | Replays the trained QE over an efficient model's saved generations, composing per-cluster cascade accuracy and escalation counts | generations JSONL, the strong model's outcomes, a QE checkpoint | per-cluster cascade accuracy and escalations per run | `--clusters`, `--accept-threshold` |
 | `cre stats` | Rebuilds per-cluster stats from saved captures, regrading every answer | pool spec, captures directory or the released captures dataset | stats JSON for `cre fit` | `--pool`, `--captures`, `--dataset` |
 | `cre compose` | Measures a routing's Stage 1 and Stage 1 + 2 accuracy, TPOT and E2EL from the batches that served it | routing spec, captures, accept probabilities | accuracy, TPOT, E2EL, escalations per run | `--routing`, `--dataset`, `--probs`, `--json` |
-| `cre cascade` | Estimates Stage 1+2 system accuracy and latency, under TPOT and E2EL, from per-cluster stats | cascade config | system accuracy, TPOT, E2EL | `--stats` |
 | `cre serve` | Runs the live router: sends each incoming query to its cluster's assigned model, and escalates weak answers to a stronger model | serving config, running backends | live HTTP router on port 4000 | `--config`, `--port` |
 
 ## Installation
@@ -106,7 +103,7 @@ from the extras below.
 
 | Extra | Adds | For |
 |---|---|---|
-| (core) | numpy, scikit-learn, sentence-transformers, pyyaml, anyio | `cre cluster`, `cre fit`, `cre cascade`; always installed |
+| (core) | numpy, scikit-learn, sentence-transformers, pyyaml, anyio | `cre cluster`, `cre fit`; always installed |
 | `data` | + pyarrow | `cre stats`, `cre compose` on the released datasets |
 | `serve` | + litellm, fastapi, uvicorn, httpx, torch, transformers | `cre serve`, the Stage 1 + Stage 2 cascade router (loads ModernBERT in-process) |
 | `qe` | + torch, transformers, datasets, accelerate | `cre qe-train`, `cre qe-eval` |
@@ -329,9 +326,7 @@ throughout.
   `error_tol`, and per-model `errors`
   and `cluster_tpot_ms`; see
   [`configs/aime_stats_1xA100_Sep2026.json`](configs/aime_stats_1xA100_Sep2026.json).
-  Fitting with `--cost-metric e2el` also needs `cluster_e2el_ms`, and `cre cascade`
-  additionally needs `cluster_output_tokens` to charge a discarded efficient pass
-  against the delivered answer.
+  Fitting with `--cost-metric e2el` also needs `cluster_e2el_ms`.
 - **Pool spec** (`cre stats`): JSON mapping each model name to its capture tag
   under `models`, plus fields copied into the stats file (`error_tol`,
   `vllm_version`); see [`configs/pools/`](configs/pools).
@@ -361,7 +356,7 @@ cre-router/
 │   ├── captures.py              read saved captures: regrade answers, join cost per request
 │   ├── stats.py                 per-cluster stats from captures (`cre stats`)
 │   ├── compose.py               Stage 1 and Stage 1 + 2 from served batches (`cre compose`)
-│   ├── cascade.py               Stage 1 + 2 estimate from per-cluster stats (`cre cascade`)
+│   ├── cascade.py               per-request Stage 1 + 2 cost, used by `cre compose`
 │   ├── bootstrap.py             confidence intervals over questions and runs
 │   ├── throughput.py            whole-run and steady-state output throughput
 │   ├── baselines/               FrugalGPT and HybridLLM re-implementations
@@ -394,6 +389,14 @@ cre-router/
 └── README.md
 ```
 
+## Development
+
+For local setup and running the test suite, see [DEVELOP.md](DEVELOP.md).
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
+
 ## Citation
 
 ```bibtex
@@ -408,10 +411,6 @@ cre-router/
 }
 ```
 
-## Development
+## Acknowledgements
 
-For local setup and running the test suite, see [DEVELOP.md](DEVELOP.md).
-
-## License
-
-Apache-2.0. See [LICENSE](LICENSE).
+This work is funded by ADAPT Centre, Trinity College Dublin, and Huawei Ireland.

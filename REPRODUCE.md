@@ -313,7 +313,7 @@ python data/prep_qe.py --train <train_generations.jsonl> \
     --test <test_generations.jsonl> --out qe-data/<name>
 cre qe-cascade --classifier <checkpoint> --generations <test_generations.jsonl> \
     --clusters 1,3 --strong-outcomes <strong_outcomes.jsonl> \
-    --strong-model <name> --out configs/<pool>_cascade_test.json
+    --strong-model <name>
 ```
 
 ## Serving the paper's pools
