@@ -1,7 +1,7 @@
 # Reproducing the paper
 
-This document regenerates every number the paper reports, from the released
-data and the `cre` commands, and lists the released artifacts, the pinned
+This document regenerates every routing and every Stage 1 + 2 number the paper
+reports, from the released data and the `cre` commands, and lists the released artifacts, the pinned
 environment and the citation. For the tool itself (install, CLI, serving) see
 the [README](README.md).
 
@@ -128,20 +128,26 @@ Gemma4-26B everywhere, so that system has no Stage 2 on two cards.
 What each pool prunes also depends on the hardware. On one card nothing in the
 TeleQnA pool is Pareto-dominated and the sweep has six regions; on two cards
 Gemma4-E2B is dominated. In the TeleMath pool Gemma4-26B (non-thinking) is
-dominated under TPOT on one card. The expected values are pinned as tests in
+dominated under TPOT on one card. The routings are checked by tests in
 [`tests/test_routing.py`](tests/test_routing.py).
 
-**Cost can be conditioned on the cluster.** By default Eq. 2 prices a model by
-one cost for the whole pool (`--cost-conditioning model`, the published rule).
+**Cost can be conditioned on the cluster.** By default each model is priced by
+one cost for the whole pool (`--cost-conditioning model`).
 `--cost-conditioning cluster` prices each (model, cluster) pair by its own
 measurement instead. It can change a routing only when a model's cost ranks
 differently from one cluster to another. On the AIME and TeleQnA pools both
 rules return the same routing at the budgets above, and so does the TeleMath
-pool on two cards. On TeleMath at TPOT 20 ms on one card it selects
-Qwen3-30B-think / Gemma4-E2B / Gemma4-26B / Qwen3-30B-think at 67.2%:
+pool on two cards and under E2EL. On TeleMath on one card it changes both TPOT
+routings:
+
+| budget | C0 | C1 | C2 | C3 | train accuracy |
+| --- | --- | --- | --- | --- | --- |
+| TPOT 20 ms | Qwen3-30B-think | Gemma4-E2B | Gemma4-26B | Qwen3-30B-think | 67.2% at 19.0 ms |
+| TPOT 25 ms | Qwen3-30B-think | Gemma4-E2B | Gemma4-26B | Gemma4-26B-think | 69.1% at 20.7 ms |
 
 ```bash
 cre fit --stats stats/telemath_stats_1xA100_Sep2026.json --budget 20 --cost-conditioning cluster
+cre fit --stats stats/telemath_stats_1xA100_Sep2026.json --budget 25 --cost-conditioning cluster
 ```
 
 ### 3. Stage 1 + 2 on the test split
@@ -279,8 +285,8 @@ cre evaluate --task telemath --model Qwen/Qwen3-30B-A3B-Thinking-2507-FP8 \
 `cre evaluate` runs vLLM's benchmark per cluster, averages over `--runs`, and
 saves the raw per-(cluster, run) measurements under `results/` so every number
 in the stats traces back to a benchmark run; `--save-generations` adds the full
-answers the grader and the classifier read. Sampling follows the paper's
-Appendix A (AIME thinking mode 0.6 / 0.95 / 20; TeleQnA 0.7 / 0.8 / 20).
+answers the grader and the classifier read. Each task fixes its own sampling
+settings, listed in `TASKS` in [`evaluate.py`](src/cre_router/evaluate.py).
 `--max-model-len` must cover the input plus the generation cap, 40,960 tokens
 for AIME and the thinking TeleMath tasks. `cre evaluate` keys each entry by the
 served model ID, whereas the shipped configs use short names such as
