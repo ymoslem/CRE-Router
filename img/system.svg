@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 560" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="50 0 602 540" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#374151"/>
@@ -11,8 +11,8 @@
   <rect x="266" y="10" width="228" height="230" rx="8" fill="none" stroke="#e9d5ff" stroke-width="1.5" stroke-dasharray="6 5"/>
   <text x="278" y="30" fill="#9333ea" font-size="13" font-weight="600">Stage 1 · Routing</text>
 
-  <rect x="30" y="262" width="300" height="188" rx="8" fill="none" stroke="#bbf7d0" stroke-width="1.5" stroke-dasharray="6 5"/>
-  <text x="42" y="282" fill="#16a34a" font-size="13" font-weight="600">Stage 2 · QE Cascade</text>
+  <rect x="60" y="262" width="270" height="188" rx="8" fill="none" stroke="#bbf7d0" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text x="72" y="282" fill="#16a34a" font-size="13" font-weight="600">Stage 2 · QE Cascade</text>
 
   <!-- Stage 1 nodes -->
   <rect x="310" y="38" width="140" height="44" rx="6" fill="#f3f4f6" stroke="#374151" stroke-width="1.5"/>
