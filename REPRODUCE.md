@@ -181,6 +181,7 @@ hold exactly the questions the probabilities escalate in that run, or
 | `telemath_tpot_b20ms_1xA100` | 0.58905 / 17.350 ms / 117.72 s | 0.64159 / 19.121 ms / 139.06 s |
 | `telemath_tpot_b25ms_1xA100` | 0.64677 / 20.442 ms / 182.29 s | 0.67383 / 21.453 ms / 194.07 s |
 | `telemath_e2el_b25s_1xA100` | 0.60000 / 19.349 ms / 25.85 s | 0.62289 / 21.694 ms / 28.23 s |
+| `telemath_e2el_b120s_1xA100` | 0.69055 / 23.664 ms / 109.64 s | 0.69632 / 23.391 ms / 130.61 s |
 | `telemath_tpot_b20ms_2xA100` | 0.71940 / 16.665 ms / 173.31 s | 0.73294 / 18.990 ms / 232.41 s |
 
 Each spec reads the probabilities its `_probs` field names, from the
