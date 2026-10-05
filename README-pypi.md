@@ -12,7 +12,8 @@ outputs to a stronger model:
   latency (TPOT or E2EL) budget.
 - **Stage 2 (quality-estimation cascade).** A lightweight ModernBERT
   classifier inspects each efficient-model output and escalates low-quality
-  answers up an ordered ladder of stronger models.
+  answers to the most accurate model the routing uses. `cre fit` plans which
+  clusters to gate.
 
 Both stages train only on task-correctness labels obtainable from standard
 benchmark evaluation; no extra annotation is required.
@@ -31,7 +32,7 @@ available through the `serve`, `qe`, `eval` and `data` extras; see the
 
 The workflow is driven by the `cre` CLI, one stage per step:
 
-`cre cluster` → `cre evaluate` → `cre fit` → `cre qe-train` → `cre qe-cascade` → `cre serve`
+`cre cluster` → `cre evaluate` → `cre fit` → `cre qe-data` → `cre qe-train` → `cre serve`
 
 Offline, from saved captures: `cre stats` → `cre fit` → `cre compose`.
 
