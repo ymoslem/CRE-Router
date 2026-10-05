@@ -29,10 +29,9 @@ models:
     litellm_model: hosted_vllm/Qwen/Qwen3-30B-A3B-Thinking-2507-FP8
     api_base: http://127.0.0.1:8002/v1
 
-# Stage 2: escalate VibeThinker's low-quality outputs to Qwen3-30B. The
-# escalation ladder is NOT configured here; it is derived from the fitted stats
-# (Pareto-efficient models ordered by the cost-adjusted lambda arithmetic). You
-# only declare each efficient model's QE classifier; the strongest needs none.
+# Stage 2: escalate VibeThinker's low-quality outputs to Qwen3-30B. The target
+# and the gated clusters are NOT configured here; `cre fit` stores them in the
+# artifacts. You only declare a QE classifier for each gated model.
 qe:
   enabled: true
   classifiers:

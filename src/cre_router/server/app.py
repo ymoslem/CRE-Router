@@ -142,7 +142,8 @@ def build_app(router, decision_log: str | Path | None = None):
 
     @app.get("/v1/models")
     async def models():
-        pool = sorted(set(router.routing_table.values()) | set(router.escalation_order))
+        pool = sorted(set(router.routing_table.values())
+                      | ({router.escalation_target} - {None}))
         return {"object": "list", "data": [{"id": m, "object": "model"} for m in pool]}
 
     @app.post("/v1/chat/completions")

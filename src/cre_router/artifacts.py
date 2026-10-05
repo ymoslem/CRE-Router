@@ -3,7 +3,7 @@
 An artifacts directory contains:
   centroids.npy  -- k-means centroids in embedding space (``cre cluster``)
   router.json    -- embedding model, routing table, lambda*, budget, cost metric,
-                    and pool stats (``cre fit``)
+                    Stage 2 plan, and pool stats (``cre fit``)
 """
 
 from __future__ import annotations
@@ -27,10 +27,9 @@ class RouterArtifacts:
     routing_table: dict[str, str] = field(default_factory=dict)
     lambda_star: float | None = None
     budget_ms: float | None = None
-    # Which measurement ``cre fit`` treated as Cost. Serving reads it back so the
-    # escalation ladder is ordered by the same metric that produced the routing
-    # table. Absent from artifacts written before this was recorded, hence the
-    # default, which is also the fit default.
+    # Which measurement ``cre fit`` treated as Cost, and so the metric under which
+    # the Stage 2 plan compares models. Absent from artifacts written before this
+    # was recorded, hence the default, which is also the fit default.
     cost_metric: str = "tpot"
     # Whether ``cre fit`` priced a model or a (model, cluster). Recorded for the
     # same reason as ``cost_metric``: the two rules can select different routing
@@ -38,6 +37,11 @@ class RouterArtifacts:
     # written before this was recorded, hence the default, which is the fit
     # default and the published rule.
     cost_conditioning: str = "model"
+    # The Stage 2 plan ``cre fit`` derives from the routing (``stage2_plan``): the
+    # model rejected answers escalate to, and each gated cluster with the Stage 1
+    # model whose answers its estimator scores. Empty when there is no Stage 2.
+    escalation_target: str | None = None
+    gated_clusters: dict[str, str] = field(default_factory=dict)
     stats: dict = field(default_factory=dict)
 
     def save(self, directory: str | Path) -> Path:

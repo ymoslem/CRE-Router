@@ -9,7 +9,6 @@ import pytest
 from cre_router.server.cascade_router import CascadeRouter, extract_query
 
 WEAK, MID, STRONG = "weak-model", "mid-model", "strong-model"
-LADDER = [WEAK, MID, STRONG]
 
 # Two well-separated centroids; queries embed onto one or the other axis.
 CENTROIDS = np.array([[1.0, 0.0], [0.0, 1.0]])
@@ -41,13 +40,15 @@ class Backend:
         }
 
 
-def make_router(backend, routing_table=None, qe_predict_fns=None, escalation_order=LADDER):
+def make_router(backend, routing_table=None, qe_predict_fns=None, target=STRONG, gated=None):
+    table = routing_table or {"0": WEAK, "1": STRONG}
     return CascadeRouter(
         centroids=CENTROIDS,
-        routing_table=routing_table or {"0": WEAK, "1": STRONG},
+        routing_table=table,
         embed_fn=embed_fn,
         completion_fn=backend,
-        escalation_order=escalation_order,
+        escalation_target=target,
+        gated_clusters={"0": table["0"]} if gated is None else gated,
         qe_predict_fns=qe_predict_fns,
     )
 
@@ -89,23 +90,36 @@ class TestStage1:
             )
 
 
-class TestTwoTierCascade:
-    def test_low_quality_output_escalates_one_step(self):
+class TestStage2:
+    def test_rejected_answer_escalates_to_the_target(self):
         backend = Backend()
         router = make_router(backend, qe_predict_fns={WEAK: always(StubDecision(accept=False))})
-        response, meta = asyncio.run(router.acompletion(request("easy question")))
-        assert backend.calls == [WEAK, MID]  # one rung up the ladder
-        assert meta.path == [WEAK, MID]
-        assert meta.escalated and meta.final_model == MID
+        _, meta = asyncio.run(router.acompletion(request("easy question")))
+        assert backend.calls == [WEAK, STRONG]
+        assert meta.path == [WEAK, STRONG]
+        assert meta.escalated and meta.final_model == STRONG
 
-    def test_accepted_output_is_returned(self):
+    def test_accepted_answer_is_returned(self):
         backend = Backend()
-        router = make_router(backend, qe_predict_fns={WEAK: always(StubDecision(accept=True))})
-        response, meta = asyncio.run(router.acompletion(request("easy question")))
+        router = make_router(backend, qe_predict_fns={WEAK: always(StubDecision(accept=True, p_accept=0.9))})
+        _, meta = asyncio.run(router.acompletion(request("easy question")))
         assert backend.calls == [WEAK]
-        assert not meta.escalated and meta.path == [WEAK]
+        assert not meta.escalated and meta.p_accept == 0.9
 
-    def test_strongest_model_bypasses_qe(self):
+    def test_escalation_goes_straight_to_the_target(self):
+        """A mid-cost model is never an intermediate step: one escalation, to the target."""
+        backend = Backend()
+        router = make_router(
+            backend,
+            routing_table={"0": MID, "1": WEAK},
+            gated={"0": MID, "1": WEAK},
+            qe_predict_fns={MID: always(StubDecision(accept=False)),
+                            WEAK: always(StubDecision(accept=False))},
+        )
+        _, meta = asyncio.run(router.acompletion(request("hard question")))
+        assert backend.calls == [WEAK, STRONG]
+
+    def test_ungated_cluster_skips_qe(self):
         backend = Backend()
         calls = []
 
@@ -113,95 +127,34 @@ class TestTwoTierCascade:
             calls.append(q)
             return StubDecision(accept=False)
 
-        # STRONG is the top of the ladder, so even a classifier for it never fires.
-        router = make_router(
-            backend,
-            routing_table={"0": WEAK, "1": STRONG},
-            qe_predict_fns={WEAK: qe},
-        )
+        # Cluster 1 is served by a model that costs more than the target in the
+        # plan, so it is not gated, even though a classifier exists for WEAK.
+        router = make_router(backend, routing_table={"0": WEAK, "1": MID},
+                             qe_predict_fns={WEAK: qe})
         _, meta = asyncio.run(router.acompletion(request("hard question")))
-        assert calls == []  # QE never ran for STRONG
-        assert backend.calls == [STRONG] and not meta.escalated
+        assert calls == [] and backend.calls == [MID] and not meta.escalated
 
 
-class TestMultiLevelCascade:
-    def test_rolls_through_ladder_until_accept(self):
-        backend = Backend()
-        # WEAK escalates, MID accepts -> stop at MID.
-        router = make_router(
-            backend,
-            routing_table={"0": WEAK, "1": STRONG},
-            qe_predict_fns={
-                WEAK: always(StubDecision(accept=False, p_accept=0.1)),
-                MID: always(StubDecision(accept=True, p_accept=0.9)),
-            },
-        )
-        _, meta = asyncio.run(router.acompletion(request("easy question")))
-        assert backend.calls == [WEAK, MID]
-        assert meta.path == [WEAK, MID]
-        assert meta.p_accept == 0.9  # last QE decision recorded
+class TestPlanValidation:
+    def test_gated_cluster_must_match_the_routing(self):
+        with pytest.raises(ValueError, match="gated on"):
+            make_router(Backend(), gated={"0": MID})
 
-    def test_rolls_all_the_way_to_strongest(self):
-        backend = Backend()
-        # WEAK and MID both escalate -> climb to STRONG (top), then stop.
-        router = make_router(
-            backend,
-            routing_table={"0": WEAK, "1": STRONG},
-            qe_predict_fns={
-                WEAK: always(StubDecision(accept=False)),
-                MID: always(StubDecision(accept=False)),
-            },
-        )
-        _, meta = asyncio.run(router.acompletion(request("easy question")))
-        assert backend.calls == [WEAK, MID, STRONG]
-        assert meta.path == [WEAK, MID, STRONG]
-        assert meta.final_model == STRONG
+    def test_gated_clusters_need_a_target(self):
+        with pytest.raises(ValueError, match="need an escalation target"):
+            make_router(Backend(), target=None)
 
-    def test_starts_mid_ladder_and_escalates_once(self):
-        backend = Backend()
-        # Stage 1 routes cluster 0 to MID; MID escalates -> STRONG (top).
-        router = make_router(
-            backend,
-            routing_table={"0": MID, "1": STRONG},
-            qe_predict_fns={MID: always(StubDecision(accept=False))},
-        )
-        _, meta = asyncio.run(router.acompletion(request("easy question")))
-        assert backend.calls == [MID, STRONG]
-        assert meta.path == [MID, STRONG]
-
-
-class TestLadderValidation:
-    def test_classifier_for_strongest_rejected(self):
-        with pytest.raises(ValueError, match="nothing to escalate to"):
+    def test_classifier_for_an_ungated_model_rejected(self):
+        with pytest.raises(ValueError, match="no gated cluster uses"):
             make_router(Backend(), qe_predict_fns={STRONG: always(StubDecision(accept=False))})
 
-    def test_classifier_off_ladder_rejected(self):
-        with pytest.raises(ValueError, match="not in escalation_order"):
-            make_router(
-                Backend(),
-                escalation_order=[WEAK, MID],  # STRONG missing
-                qe_predict_fns={STRONG: always(StubDecision(accept=False))},
-            )
-
-    def test_routed_model_off_ladder_rejected(self):
-        with pytest.raises(ValueError, match="not in escalation_order"):
-            make_router(
-                Backend(),
-                routing_table={"0": "unlisted", "1": STRONG},
-                escalation_order=LADDER,
-                qe_predict_fns={WEAK: always(StubDecision(accept=True))},
-            )
-
-    def test_routed_model_without_classifier_warns(self, caplog):
+    def test_gated_model_without_classifier_warns(self, caplog):
         import logging
 
         with caplog.at_level(logging.WARNING):
-            # MID is routed and non-top, but only WEAK has a classifier.
-            make_router(
-                Backend(),
-                routing_table={"0": MID, "1": STRONG},
-                qe_predict_fns={WEAK: always(StubDecision(accept=True))},
-            )
+            make_router(Backend(), routing_table={"0": WEAK, "1": MID},
+                        gated={"0": WEAK, "1": MID},
+                        qe_predict_fns={WEAK: always(StubDecision(accept=True))})
         assert any("never escalate" in r.message for r in caplog.records)
 
 
@@ -246,104 +199,21 @@ class TestExtractQuery:
         backend = NullBackend()
         router = make_router(backend, qe_predict_fns={WEAK: always(StubDecision(accept=False))})
         _, meta = asyncio.run(router.acompletion(request("easy question")))
-        assert meta.path == [WEAK, MID]
+        assert meta.path == [WEAK, STRONG]
 
 
-class TestEscalationOrderDerivation:
-    """The auto-derived ladder must match the lambda-table arithmetic: drop
-    Pareto-dominated models, then order weak -> strong by TPOT."""
-
-    def _artifacts(self):
-        from cre_router.artifacts import RouterArtifacts
-
-        # V is fast/weak; Q3.5 dominates Q3-30B (lower TPOT AND lower error).
-        stats = {
-            "cluster_sizes": {"0": 10},
-            "models": {
-                "V": {"tpot_ms": 9.0, "errors": {"0": 0.18}},
-                "Q3.5": {"tpot_ms": 17.0, "errors": {"0": 0.05}},
-                "Q3-30B": {"tpot_ms": 24.0, "errors": {"0": 0.08}},
-            },
-        }
-        return RouterArtifacts(stats=stats)
-
-    def test_derived_order_drops_dominated_and_sorts_weak_to_strong(self):
-        from cre_router.server.cascade_router import _escalation_order
-
-        config = {"models": {"V": {}, "Q3.5": {}, "Q3-30B": {}}, "qe": {"enabled": True}}
-        # Q3-30B is dominated by Q3.5 -> excluded; ladder is V (weak) -> Q3.5 (strong).
-        assert _escalation_order(config, self._artifacts()) == ["V", "Q3.5"]
-
-    def test_derivation_restricted_to_served_models(self):
-        from cre_router.server.cascade_router import _escalation_order
-
-        config = {"models": {"V": {}, "Q3-30B": {}}, "qe": {"enabled": True}}
-        # Only V and Q3-30B are served; neither dominates the other here.
-        assert _escalation_order(config, self._artifacts()) == ["V", "Q3-30B"]
-
-    def test_missing_stats_raises(self):
-        from cre_router.artifacts import RouterArtifacts
-        from cre_router.server.cascade_router import _escalation_order
-
-        with pytest.raises(ValueError, match="no stats"):
-            _escalation_order({"models": {"V": {}}, "qe": {"enabled": True}}, RouterArtifacts())
-
-
-class TestEscalationOrderFollowsFittedCostMetric:
-    """A table fitted under E2EL must be served with an E2EL-ordered ladder.
-
-    Thinking and non-thinking modes of one model decode at nearly the same speed
-    but differ several-fold per request, so TPOT and E2EL disagree about which
-    models survive pruning and in what order. Deriving the ladder under the wrong
-    metric can therefore escalate into a model that is both costlier than the top
-    rung and less accurate than it.
-    """
-
-    STATS = {
-        "cluster_sizes": {"0": 10},
-        "models": {
-            "small-nothink": {"tpot_ms": 12.0, "e2el_ms": 6_000, "errors": {"0": 0.60}},
-            "small-think": {"tpot_ms": 13.0, "e2el_ms": 70_000, "errors": {"0": 0.40}},
-            "big-nothink": {"tpot_ms": 30.0, "e2el_ms": 20_000, "errors": {"0": 0.30}},
-        },
-    }
-    CONFIG = {
-        "models": {"small-nothink": {}, "small-think": {}, "big-nothink": {}},
-        "qe": {"enabled": True},
-    }
-
-    def _artifacts(self, cost_metric):
-        from cre_router.artifacts import RouterArtifacts
-
-        return RouterArtifacts(stats=self.STATS, cost_metric=cost_metric)
-
-    def test_e2el_fit_prunes_the_verbose_model_and_orders_by_e2el(self):
-        from cre_router.server.cascade_router import _escalation_order
-
-        # Under E2EL, small-think costs more than big-nothink while being less
-        # accurate, so it is dominated and must not appear as a rung at all.
-        assert _escalation_order(self.CONFIG, self._artifacts("e2el")) == [
-            "small-nothink",
-            "big-nothink",
-        ]
-
-    def test_tpot_fit_keeps_it(self):
-        from cre_router.server.cascade_router import _escalation_order
-
-        assert _escalation_order(self.CONFIG, self._artifacts("tpot")) == [
-            "small-nothink",
-            "small-think",
-            "big-nothink",
-        ]
-
+class TestArtifacts:
     def test_artifacts_without_a_recorded_metric_default_to_tpot(self):
         """router.json written before the metric was recorded must still load."""
         from cre_router.artifacts import RouterArtifacts
 
         assert RouterArtifacts().cost_metric == "tpot"
 
-    def test_fitted_metric_survives_a_save_load_round_trip(self, tmp_path):
+    def test_plan_survives_a_save_load_round_trip(self, tmp_path):
         from cre_router.artifacts import RouterArtifacts
 
-        RouterArtifacts(stats=self.STATS, cost_metric="e2el").save(tmp_path)
-        assert RouterArtifacts.load(tmp_path).cost_metric == "e2el"
+        RouterArtifacts(cost_metric="e2el", escalation_target=STRONG,
+                        gated_clusters={"0": WEAK}).save(tmp_path)
+        back = RouterArtifacts.load(tmp_path)
+        assert (back.cost_metric, back.escalation_target, back.gated_clusters) == (
+            "e2el", STRONG, {"0": WEAK})

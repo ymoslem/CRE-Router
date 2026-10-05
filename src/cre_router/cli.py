@@ -2,7 +2,9 @@
 
   cre cluster     embed training queries, select k, fit centroids
   cre evaluate    measure per-cluster accuracy, TPOT and E2EL for a model (requires [eval])
-  cre fit         Pareto-prune the pool, sweep lambda, select lambda* for a budget
+  cre fit         Pareto-prune the pool, sweep lambda, select lambda* for a budget,
+                  and plan Stage 2: the escalation target and the gated clusters
+  cre qe-data     build an estimator's training data from cre evaluate generations
   cre qe-train    fine-tune the accept/escalate QE classifier (requires [qe])
   cre qe-eval     evaluate a trained QE classifier on a split (requires [qe])
   cre qe-cascade  replay a QE classifier over saved generations (requires [qe])
@@ -10,7 +12,7 @@
   cre stats       build the stats file cre fit reads from saved captures
   cre compose     measure Stage 1 and Stage 1 + 2 on the batches that were served
 
-End to end: cluster -> evaluate (per model) -> fit -> qe-train -> qe-cascade -> serve.
+End to end: cluster -> evaluate (per model) -> fit -> qe-data -> qe-train -> serve.
 Offline, from saved captures: stats -> fit -> compose.
 """
 
@@ -36,6 +38,7 @@ from cre_router.routing import (
     pareto_prune,
     routing_regions,
     select_lambda,
+    stage2_plan,
     system_metrics,
 )
 
@@ -134,6 +137,19 @@ def cmd_fit(args: argparse.Namespace) -> None:
           + (f", eta {selection.eta * eta_scale:.3f} {eta_unit}"
              if selection.eta is not None else ""))
 
+    plan = stage2_plan(models, selection.region.assignment, cluster_sizes, args.escalate_to)
+    if plan.target is None:
+        print("\nStage 2: none; no cluster is served by a model cheaper than the target")
+    else:
+        how = ("set by --escalate-to" if args.escalate_to
+               else "the most accurate model in the routing on the training data")
+        print(f"\nStage 2: escalate to {plan.target} ({how})")
+        for model, clusters in plan.estimators.items():
+            print(f"  gate {', '.join('C' + c for c in clusters)}: train an estimator on "
+                  f"{model}'s answers")
+        print("Next, for each gated model: cre qe-data on its cre evaluate generations, "
+              "then cre qe-train on the result")
+
     if args.output:
         out_dir = Path(args.output)
         artifacts = (
@@ -146,6 +162,8 @@ def cmd_fit(args: argparse.Namespace) -> None:
         artifacts.budget_ms = args.budget
         artifacts.cost_metric = args.cost_metric
         artifacts.cost_conditioning = args.cost_conditioning
+        artifacts.escalation_target = plan.target
+        artifacts.gated_clusters = plan.gated
         artifacts.stats = stats
         artifacts.save(out_dir)
         print(f"Saved routing table to {out_dir}/router.json")
@@ -332,6 +350,14 @@ def _assign_clusters_into(dataset: list[dict], artifacts_dir: str, text_field: s
         row["cluster"] = int(label)
 
 
+def cmd_qe_data(args: argparse.Namespace) -> None:
+    from cre_router.qe.data import build
+
+    sizes = build(args.train, args.test, args.out, task=args.task)
+    print(f"Wrote {args.out}/train.jsonl ({sizes['train']}) and test.jsonl ({sizes['test']})")
+    print(f"Next: cre qe-train --dataset {args.out} --output-dir <checkpoint dir>")
+
+
 def cmd_qe_train(args: argparse.Namespace, extra: list[str]) -> None:
     from cre_router.qe.train import main as qe_train_main
 
@@ -381,8 +407,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="cre", description="Cluster, Route, Escalate: cost-aware LLM routing.",
-        epilog="End to end: cluster -> evaluate (per model) -> fit -> qe-train -> "
-               "qe-cascade -> serve. Offline, from saved captures: stats -> fit -> compose.")
+        epilog="End to end: cluster -> evaluate (per model) -> fit -> qe-data -> "
+               "qe-train -> serve. Offline, from saved captures: stats -> fit -> compose.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def command(name: str, help: str, **kw) -> argparse.ArgumentParser:
@@ -487,8 +513,22 @@ def main(argv: list[str] | None = None) -> None:
                         "end-to-end request latency, "
                         "needed when pool members differ in output length rather "
                         "than decode speed, such as a thinking/non-thinking pair")
+    p.add_argument("--escalate-to", default=None,
+                   help="Stage 2 escalation target; default is the most accurate model "
+                        "the routing uses. Needed when the routing uses one model only")
     p.add_argument("--output", default=None, help="artifacts directory to update")
     p.set_defaults(func=cmd_fit)
+
+    p = command("qe-data", "build an estimator's training data from cre evaluate generations")
+    p.add_argument("--train", nargs="+", required=True,
+                   help="the gated model's *_generations.jsonl on the training questions")
+    p.add_argument("--test", nargs="+", required=True,
+                   help="the gated model's *_generations.jsonl on the held-out questions")
+    p.add_argument("--out", required=True, help="directory for train.jsonl and test.jsonl")
+    p.add_argument("--task", choices=sorted(TASKS), default=None,
+                   help="regrade every answer from full_output with this task's grader; "
+                        "without it the stored verdict is copied")
+    p.set_defaults(func=cmd_qe_data)
 
     p = command("stats", "build the per-cluster stats file cre fit reads, from saved captures")
     p.add_argument("--pool", required=True, help="pool spec JSON (see configs/pools/)")

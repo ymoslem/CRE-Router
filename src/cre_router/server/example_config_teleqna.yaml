@@ -1,9 +1,8 @@
 # Example serving config for the paper's TeleQnA system on 1 x A100.
 #
 # At B = 20 ms, `cre fit` routes C0 to Gemma4-E4B and C1 to Gemma4-26B, so
-# those are the two models to serve. The escalation ladder is derived from the
-# fitted stats, never configured by hand: over the served models it is
-# Gemma4-E4B -> Gemma4-26B.
+# those are the two models to serve. `cre fit` also plans Stage 2, never
+# configured by hand: it gates C0 and escalates to Gemma4-26B.
 #
 # Prerequisites:
 #   1. `cre cluster` and `cre fit` have produced artifacts/teleqna/:

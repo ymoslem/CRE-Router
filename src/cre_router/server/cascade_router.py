@@ -4,18 +4,12 @@ Stage 1: embed the incoming query, assign it to the nearest training
 centroid, and send it to the model the offline routing table selected for
 that cluster (paper Sec. 4).
 
-Stage 2: a quality-estimation (QE) cascade over an ordered escalation ladder
-(paper Sec. 5; the paper runs two-model pools, this generalises to more). The
-ladder is always derived from the arithmetic, never configured by hand: it
-follows the lambda table (as lambda rises the cheaper model wins), so the
-Pareto-efficient models ordered by ascending cost give the escalation order,
-under whichever cost metric ``cre fit`` used. Each model on the ladder (except
-the strongest) has its own QE classifier trained on that model's outputs.
-Starting from the model Stage 1 picked, the router runs the QE classifier for
-the current model; on "escalate" it moves to the next stronger model and
-repeats, stopping when a model's output is accepted or the top of the ladder
-is reached. Outputs from a model with no classifier (e.g. the strongest) are
-returned as-is.
+Stage 2: a quality estimator reads the answer of each gated cluster's model and
+escalates the answers it rejects to one strong model. The target and the gated
+clusters are the Stage 2 plan ``cre fit`` stores in the artifacts
+(``routing.stage2_plan``), never configured by hand: the target is the most
+accurate model the routing uses, and every cluster served by a cheaper model is
+gated. Each gated model has its own classifier, trained on its own answers.
 
 Model calls go through ``litellm.Router`` against the vLLM servers in the
 pool. All heavy components are injectable, which is also how the tests
@@ -34,7 +28,6 @@ import numpy as np
 
 from cre_router.artifacts import RouterArtifacts
 from cre_router.clustering import assign_clusters
-from cre_router.routing import models_from_stats, pareto_prune
 
 logger = logging.getLogger(__name__)
 
@@ -109,16 +102,17 @@ class CascadeRouter:
         routing_table: dict[str, str],
         embed_fn: EmbedFn,
         completion_fn: CompletionFn,
-        escalation_order: list[str] | None = None,
+        escalation_target: str | None = None,
+        gated_clusters: dict[str, str] | None = None,
         qe_predict_fns: dict[str, QEPredictFn] | None = None,
     ):
         self.centroids = np.asarray(centroids)
         self.routing_table = {str(k): v for k, v in routing_table.items()}
         self.embed_fn = embed_fn
         self.completion_fn = completion_fn
-        self.escalation_order = list(escalation_order or [])
+        self.escalation_target = escalation_target
+        self.gated_clusters = {str(k): v for k, v in (gated_clusters or {}).items()}
         self.qe_predict_fns = dict(qe_predict_fns or {})
-        self._rung = {model: i for i, model in enumerate(self.escalation_order)}
 
         cluster_ids = {str(i) for i in range(len(self.centroids))}
         extra = set(self.routing_table) - cluster_ids
@@ -131,45 +125,32 @@ class CascadeRouter:
                 f"the {len(self.centroids)} centroids and the routing table must "
                 f"come from the same clustering run."
             )
-        # Every model a classifier can fire for must sit on the ladder with a
-        # stronger model above it to escalate into.
+        if self.gated_clusters and self.escalation_target is None:
+            raise ValueError("gated clusters need an escalation target")
+        for cluster, model in self.gated_clusters.items():
+            if self.routing_table.get(cluster) != model:
+                raise ValueError(
+                    f"cluster {cluster} is gated on {model!r} but routed to "
+                    f"{self.routing_table.get(cluster)!r}; the plan and the routing "
+                    f"table must come from the same `cre fit`"
+                )
+        gated_models = set(self.gated_clusters.values())
         for model in self.qe_predict_fns:
-            if model not in self._rung:
-                raise ValueError(f"QE classifier for {model!r} but it is not in escalation_order")
-            if self._rung[model] == len(self.escalation_order) - 1:
-                raise ValueError(
-                    f"QE classifier for {model!r} which is the strongest model; "
-                    f"it has nothing to escalate to"
-                )
-        # Any model Stage 1 can route to should be on the ladder, otherwise a
-        # cascade could never start from it.
-        top_model = self.escalation_order[-1] if self.escalation_order else None
-        for model in set(self.routing_table.values()):
-            if self.qe_predict_fns and model not in self._rung:
-                raise ValueError(
-                    f"routing table uses {model!r} which is not in escalation_order"
-                )
-            # A routed, non-strongest model with no classifier is terminal: its
-            # cluster's queries can never escalate. Legal, but usually a mistake.
-            if self.qe_predict_fns and model != top_model and model not in self.qe_predict_fns:
+            if model not in gated_models:
+                raise ValueError(f"QE classifier for {model!r}, which no gated cluster uses")
+        # A gated model with no classifier never escalates. Legal, since Stage 2
+        # can be switched off, but when some classifiers are given it is a mistake.
+        if self.qe_predict_fns:
+            for model in sorted(gated_models - set(self.qe_predict_fns)):
                 logger.warning(
-                    "model %r is routed to but has no QE classifier and is not the "
-                    "strongest model; its cluster(s) will never escalate",
-                    model,
-                )
+                    "model %r serves gated clusters but has no QE classifier; "
+                    "its answers will never escalate", model)
 
     def route_query(self, query: str) -> tuple[int, str]:
         """Stage 1: nearest centroid, then the offline cluster-to-model table."""
         embedding = self.embed_fn([query])
         cluster = int(assign_clusters(embedding, self.centroids)[0])
         return cluster, self.routing_table[str(cluster)]
-
-    def _stronger_model(self, model: str) -> str | None:
-        """The next model up the ladder, or None if ``model`` is the top / off-ladder."""
-        rung = self._rung.get(model)
-        if rung is None or rung + 1 >= len(self.escalation_order):
-            return None
-        return self.escalation_order[rung + 1]
 
     async def acompletion(self, request: dict) -> tuple[Any, RouteMeta]:
         query = extract_query(request["messages"])
@@ -179,21 +160,16 @@ class CascadeRouter:
         response = await self.completion_fn(model, request)
         meta = RouteMeta(cluster=cluster, path=[model])
 
-        # Walk up the ladder: evaluate the current model's output and escalate
-        # while a classifier says so and a stronger model exists.
-        while True:
-            current = meta.path[-1]
-            predict = self.qe_predict_fns.get(current)
-            stronger = self._stronger_model(current)
-            if predict is None or stronger is None:
-                break
+        # Stage 2: in a gated cluster, the estimator reads the answer, and a
+        # rejected answer is escalated to the target.
+        predict = self.qe_predict_fns.get(model)
+        if str(cluster) in self.gated_clusters and predict is not None:
             output, num_tokens = _extract_output(response)
             decision = await anyio.to_thread.run_sync(predict, query, output, num_tokens)
             meta.p_accept = getattr(decision, "p_accept", None)
-            if decision.accept:
-                break
-            response = await self.completion_fn(stronger, request)
-            meta.path.append(stronger)
+            if not decision.accept:
+                response = await self.completion_fn(self.escalation_target, request)
+                meta.path.append(self.escalation_target)
         return response, meta
 
     @classmethod
@@ -241,11 +217,18 @@ class CascadeRouter:
             payload = {k: v for k, v in request.items() if k != "model"}
             return await litellm_router.acompletion(model=model, **payload)
 
-        escalation_order: list[str] = []
         qe_predict_fns: dict[str, QEPredictFn] = {}
         qe_cfg = config.get("qe") or {}
+        target, gated = artifacts.escalation_target, artifacts.gated_clusters
         if qe_cfg.get("enabled"):
-            escalation_order = _escalation_order(config, artifacts)
+            if not gated:
+                raise ValueError(
+                    f"{config['artifacts_dir']} gates no cluster, so QE has nothing to do. "
+                    f"Either the routing has no Stage 2, or the artifacts predate the "
+                    f"Stage 2 plan; run `cre fit --output {config['artifacts_dir']}` again")
+            if target is not None and target not in config["models"]:
+                raise ValueError(f"the escalation target {target!r} is missing from the "
+                                 f"config's models")
 
             from cre_router.qe import QEClassifier
 
@@ -263,42 +246,7 @@ class CascadeRouter:
             routing_table=artifacts.routing_table,
             embed_fn=embed_fn,
             completion_fn=completion_fn,
-            escalation_order=escalation_order,
+            escalation_target=target if qe_cfg.get("enabled") else None,
+            gated_clusters=gated if qe_cfg.get("enabled") else {},
             qe_predict_fns=qe_predict_fns,
         )
-
-
-def _escalation_order(config: dict, artifacts: RouterArtifacts) -> list[str]:
-    """The weakest-to-strongest escalation ladder, derived purely from the
-    arithmetic ``cre fit`` uses; it is never configured by hand.
-
-    Build the pool from the fitted stats, drop Pareto-dominated models, and
-    order the survivors by ascending cost. This is exactly the lambda-table
-    capability order (as lambda rises the cheaper, weaker model wins), so the
-    ladder cannot place a dominated model (costlier yet less accurate) as a
-    stronger rung. Only served models (present in the config) are kept, since
-    each rung must be callable.
-
-    Cost means whichever metric ``cre fit`` used, read back from the artifacts.
-    Deriving the ladder under TPOT while the table was fitted under E2EL breaks
-    the correspondence, and on a pool mixing thinking and non-thinking members
-    the two metrics disagree about both pruning and order.
-    """
-    if not (artifacts.stats or {}).get("models"):
-        raise ValueError(
-            "cannot derive the escalation ladder: the artifacts hold no stats. "
-            "Run `cre fit --output <dir>` so the routing stats are stored."
-        )
-    if getattr(artifacts, "cost_conditioning", "model") != "model":
-        raise ValueError(
-            "this routing table was fitted with cost_conditioning 'cluster', for "
-            "which a single escalation ladder is not well defined: the cost order "
-            "of the pool can differ between clusters, so the ladder would depend "
-            "on which cluster a query landed in. Serve a table fitted with "
-            "cost_conditioning 'model', or extend the ladder to be per cluster."
-        )
-    all_models, _ = models_from_stats(artifacts.stats, artifacts.cost_metric)
-    served = set(config["models"])
-    pool = [m for m in all_models if m.name in served]
-    efficient, _ = pareto_prune(pool)
-    return [m.name for m in sorted(efficient, key=lambda m: m.cost_ms)]

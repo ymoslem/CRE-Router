@@ -2,8 +2,7 @@
 #
 # At B = 25 s under E2EL, `cre fit` routes C1 to Gemma4-E2B and the other three
 # clusters to Gemma4-26B (thinking off), so those are the two models to serve.
-# The escalation ladder is derived from the fitted stats: over the served models
-# it is Gemma4-E2B -> Gemma4-26B.
+# `cre fit` also plans Stage 2: it gates C1 and escalates to Gemma4-26B.
 #
 # Prerequisites:
 #   1. `cre cluster` (k = 4 on the TeleMath train split) and `cre fit` have

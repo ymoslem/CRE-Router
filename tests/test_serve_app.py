@@ -40,7 +40,8 @@ def make_client(qe_predict_fns=None):
         routing_table={"0": "weak", "1": "strong"},
         embed_fn=embed_fn,
         completion_fn=Backend(),
-        escalation_order=["weak", "strong"],
+        escalation_target="strong",
+        gated_clusters={"0": "weak"},
         qe_predict_fns=qe_predict_fns,
     )
     return TestClient(build_app(router))

@@ -21,10 +21,9 @@ stronger model:
   tuned once to `lambda*` ($\lambda^*$) to satisfy a latency budget (TPOT or E2EL).
 - **Stage 2 (quality-estimation cascade).** A lightweight classifier
   inspects each efficient-model output and escalates low-quality answers to
-  a stronger model. With more than two models, escalation follows an ordered
-  ladder (weakest to strongest, following the $\lambda$ table): each model has
-  its own classifier and the router rolls up to the next stronger model until
-  an output is accepted or the top is reached.
+  a stronger model. `cre fit` plans this stage from the routing: the target is
+  the most accurate model the routing uses, every cluster served by a cheaper
+  model is gated, and each gated model gets its own classifier.
 
 Both stages train only on task-correctness labels obtainable from standard
 benchmark evaluation; no extra annotation is required.
@@ -48,7 +47,7 @@ ones.
 
 The full workflow is driven by the `cre` CLI, one command per step:
 
-`cre cluster` → `cre evaluate` → `cre fit` → `cre qe-train` → `cre qe-cascade` → `cre serve`
+`cre cluster` → `cre evaluate` → `cre fit` → `cre qe-data` → `cre qe-train` → `cre serve`
 
 Serving (`cre serve`) switches between the live vLLM backends through [LiteLLM](https://github.com/BerriAI/litellm).
 Two commands sit outside this chain and work offline, with no GPU.
@@ -68,7 +67,8 @@ cre <command> --help
 |---|---|---|---|---|
 | `cre cluster` | Embeds training queries and fits k-means centroids (k chosen by Silhouette) | JSONL of training queries | `centroids.npy` and `router.json`; `train_assignments.jsonl` | `--k`, `--embedding-model` |
 | `cre evaluate` | Runs each model per cluster through vLLM's benchmark, scores answers, averages per-cluster error and TPOT. This is the slowest step; cost scales with model size, output length, and `--runs`, and it runs once per model. | dataset JSONL, a running vLLM server, fitted centroids | per-model entry in the stats JSON; raw runs under `results/` | `--runs`, `--concurrency`, `--save-generations`, `--artifacts` |
-| `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^*$ under the cost budget | stats JSON, budget B | routing table and $\lambda^*$ in `router.json` | `--budget` (required), `--cost-metric`, `--error-tol`, `--output` |
+| `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^*$ under the cost budget, and plans Stage 2: the escalation target and the clusters to gate | stats JSON, budget B | routing table, $\lambda^*$ and the Stage 2 plan in `router.json`; prints which estimators to train next | `--budget` (required), `--cost-metric`, `--error-tol`, `--escalate-to`, `--output` |
+| `cre qe-data` | Builds a gated model's estimator training data from its `cre evaluate` generations | the gated model's `*_generations.jsonl` on train and held-out questions | `train.jsonl` and `test.jsonl` for `cre qe-train` | `--train`, `--test`, `--out`, `--task` |
 | `cre qe-train` | Fine-tunes ModernBERT-base as the accept/escalate QE classifier | HF dataset of model outputs with correctness labels | QE classifier checkpoint | `--train-split`, `--eval-split`, `--learning-rate`, `--max-length` |
 | `cre qe-cascade` | Replays the trained QE over an efficient model's saved generations, composing per-cluster cascade accuracy and escalation counts | generations JSONL, the strong model's outcomes, a QE checkpoint | per-cluster cascade accuracy and escalations per run | `--clusters`, `--accept-threshold` |
 | `cre stats` | Rebuilds per-cluster stats from saved captures, regrading every answer | pool spec, captures directory or the released captures dataset | stats JSON for `cre fit` | `--pool`, `--captures`, `--dataset` |
@@ -168,9 +168,21 @@ cre evaluate --task aime --model WeiboAI/VibeThinker-1.5B \
     --dataset data/aime_train.jsonl --artifacts artifacts/aime \
     --stats-out configs/aime_stats.json --runs 5 --save-generations
 
-# 3. compute the routing table and lambda*
+# 3. compute the routing table, lambda* and the Stage 2 plan; it prints the
+#    escalation target and each gated model, which needs an estimator
 cre fit --stats configs/aime_stats.json --budget 20 --output artifacts/aime
+
+# 4. for each gated model, build its estimator data from the generations step 2
+#    saved, on the training questions and on held-out ones
+cre qe-data --task aime --out data/qe-vibethinker \
+    --train <VibeThinker train *_generations.jsonl> --test <held-out *_generations.jsonl>
+
+# 5. train that estimator
+cre qe-train --dataset data/qe-vibethinker --output-dir qe-vibethinker
 ```
+
+Each checkpoint from step 5 goes under `qe.classifiers` in the serving config,
+keyed by its gated model (see the next section).
 
 Each `cre evaluate` call appends that model's entry to the stats JSON, so a pool
 is measured by repeating step 2 once per model. `--save-generations` also writes
@@ -219,8 +231,8 @@ and config the same way once you see the shape of it.
 
 3. Write a serving config. It carries only deployment wiring — the model pool
    (each model's endpoint) and the QE classifier checkpoints. The routing
-   table, $\lambda^*$, and the escalation ladder are read from the artifacts and
-   the arithmetic, never set by hand. Point
+   table, $\lambda^*$, the escalation target and the gated clusters are read from
+   the artifacts, never set by hand. Point
    [`example_config_aime24.yaml`](src/cre_router/server/example_config_aime24.yaml)
    at your backends and serve:
 
@@ -232,8 +244,8 @@ and config the same way once you see the shape of it.
    [`example_config_teleqna.yaml`](src/cre_router/server/example_config_teleqna.yaml)
    and [`example_config_telemath.yaml`](src/cre_router/server/example_config_telemath.yaml),
    are also provided. The TeleMath one serves the E2EL routing. The TPOT routings
-   need an escalation target per cluster and Gemma 4's thinking switch, which
-   `cre serve` does not support yet.
+   use Gemma 4 with reasoning on, and `cre serve` cannot yet switch Gemma 4's
+   reasoning per model.
 
 4. Send a standard chat-completions request to the router on port 4000, not to
    a vLLM backend. The endpoint is OpenAI-compatible, so an existing client
@@ -263,7 +275,7 @@ and config the same way once you see the shape of it.
 
 **Models.** Any model you can serve behind a chat-completions HTTP endpoint
 (the paper uses vLLM). The pool is arbitrary and can mix sizes and families;
-routing, Pareto pruning, and the escalation ladder adapt to whatever pool you
+routing, Pareto pruning, and the Stage 2 plan adapt to whatever pool you
 measure. The paper's pools are Qwen 3 / Qwen 3.5, Gemma 4, and VibeThinker
 (see [REPRODUCE.md](REPRODUCE.md)).
 
@@ -340,9 +352,9 @@ throughout.
 An artifacts directory (written by `cre cluster` / `cre fit`) holds
 `centroids.npy`, `router.json`, and `train_assignments.jsonl`. `router.json`
 carries the embedding model, the routing table, $\lambda^*$, the budget, the cost
-metric it was fitted under, and the pool stats. `cre serve` reads the last two
-back to derive the escalation ladder under the same metric that produced the
-table.
+metric it was fitted under, the Stage 2 plan (escalation target and gated
+clusters), and the pool stats. `cre serve` reads the plan back, so the served
+system escalates exactly as `cre fit` planned.
 
 ## Repository layout
 
@@ -368,7 +380,7 @@ cre-router/
 │   │   ├── cascade.py           replay the QE over saved generations (`cre qe-cascade`)
 │   │   └── evaluate.py          standalone QE metrics (`cre qe-eval`)
 │   └── server/                  live cascade router
-│       ├── cascade_router.py    Stage 1 routing + Stage 2 escalation ladder
+│       ├── cascade_router.py    Stage 1 routing + Stage 2 escalation
 │       ├── app.py               HTTP endpoint, /stats, decision log
 │       ├── example_config_aime24.yaml    serving config (AIME)
 │       ├── example_config_teleqna.yaml   serving config (TeleQnA)

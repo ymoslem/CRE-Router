@@ -443,6 +443,63 @@ def system_metrics(
     return acc, tpot
 
 
+@dataclass(frozen=True)
+class Stage2Plan:
+    """Where Stage 2 escalates, and which clusters it gates.
+
+    ``target`` is the model every rejected answer is escalated to, or None when
+    the routing has nothing to escalate to. ``gated`` maps each gated cluster to
+    the model that serves it at Stage 1, the model whose answers its quality
+    estimator is trained on.
+    """
+
+    target: str | None
+    gated: dict[str, str]
+
+    @property
+    def estimators(self) -> dict[str, list[str]]:
+        """Gated model -> the clusters its estimator gates."""
+        out: dict[str, list[str]] = {}
+        for cluster, model in sorted(self.gated.items()):
+            out.setdefault(model, []).append(cluster)
+        return out
+
+
+def stage2_plan(
+    models: list[ModelStats],
+    assignment: dict[str, str],
+    cluster_sizes: dict[str, int | float],
+    escalate_to: str | None = None,
+) -> Stage2Plan:
+    """The escalation target and the gated clusters of a routing.
+
+    The target is the most accurate model the routing uses, by size-weighted
+    accuracy on the training data, ties going to the cheaper model. Stage 2 gates
+    every cluster whose Stage 1 model costs less than the target under the fitted
+    cost metric: escalating from a model to one that costs no less is the only
+    direction that can pay. ``escalate_to`` overrides the target, for a routing
+    that uses a single model and so has nothing of its own to escalate to.
+    """
+    by_name = {m.name: m for m in models}
+    total = sum(cluster_sizes.values())
+
+    def accuracy(m: ModelStats) -> float:
+        return sum(n * (1.0 - m.errors[c]) for c, n in cluster_sizes.items()) / total
+
+    if escalate_to is not None:
+        if escalate_to not in by_name:
+            raise ValueError(f"escalation target {escalate_to!r} is not in the stats")
+        target = by_name[escalate_to]
+    else:
+        used = [by_name[name] for name in sorted(set(assignment.values()))]
+        target = max(used, key=lambda m: (accuracy(m), -m.cost_ms))
+        if len(used) == 1:
+            return Stage2Plan(target=None, gated={})
+    gated = {c: name for c, name in assignment.items()
+             if by_name[name].cost_ms < target.cost_ms}
+    return Stage2Plan(target=target.name if gated else None, gated=gated)
+
+
 def eta(
     models: list[ModelStats],
     assignment: dict[str, str],

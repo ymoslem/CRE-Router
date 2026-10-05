@@ -334,9 +334,8 @@ Three ready-made serving configs are provided, all for 1 x A100:
   TeleMath at E2EL 25 s, Gemma4-E2B escalating to Gemma4-26B.
 
 Point each at your running vLLM servers, then `cre serve --config <file>`. The
-TeleMath TPOT routings cannot be served yet: `cre serve` escalates along one
-ladder ordered by cost, so Gemma4-E2B would escalate to Gemma4-E4B-think rather
-than to Qwen3-30B, and it does not pass Gemma 4's thinking switch.
+TeleMath TPOT routings cannot be served yet: they use Gemma 4 with reasoning
+on, and `cre serve` does not pass Gemma 4's thinking switch.
 
 ## Released artifacts
 
