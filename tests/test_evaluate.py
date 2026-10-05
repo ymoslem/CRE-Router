@@ -66,7 +66,7 @@ class TestGemma4TaskWiring:
         # Only the Gemma 4 arms bake enable_thinking into the prompt text;
         # every other task lets the benchmark apply the chat template.
         assert TASKS["telemath_gemma4"].pre_rendered
-        pre_rendered = {"telemath_gemma4"}
+        pre_rendered = {"telemath_gemma4", "supergpqa_gemma4", "supergpqa_gemma4_nothink"}
         for name, task in TASKS.items():
             if name not in pre_rendered:
                 assert not task.pre_rendered, name

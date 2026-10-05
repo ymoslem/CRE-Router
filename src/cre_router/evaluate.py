@@ -78,6 +78,29 @@ def parse_teleqna_answer(text: str) -> int | None:
     return int(numbers[-1]) if numbers else None
 
 
+def parse_supergpqa_answer(text: str) -> int | None:
+    """Extract a SuperGPQA choice from a completion, as a 0-based index.
+
+    SuperGPQA is multiple choice with up to ten options, labelled A-J, and the
+    prompt asks for the letter in ``\\boxed{}``. The letter is returned as an
+    index so it matches the integer convention the other tasks use.
+
+    Patterns are tried most-explicit first, and the last match wins within each,
+    since a reasoning model often restates candidate letters before committing
+    to one.
+    """
+    content = split_thinking(text)
+    for pattern in (
+        r"\\boxed\{\s*([A-J])\s*\}",
+        r"\*{0,2}Answer\*{0,2}\s*[:：]\s*\(?\s*([A-J])\b",
+        r"\b([A-J])\b",
+    ):
+        matches = re.findall(pattern, content)
+        if matches:
+            return ord(matches[-1]) - ord("A")
+    return None
+
+
 # TeleMath gold answers are short numbers (at most 17 characters across the
 # 500-question dataset) and a well-formed completion states the answer at the
 # very end. Degenerate or truncated generations, however, can run to hundreds of
@@ -292,6 +315,82 @@ TASKS: dict[str, Task] = {
         top_k=20,
         min_p=0.0,
         max_tokens=40960,
+    ),
+    # SuperGPQA is served by two task entries rather than one, because its pool
+    # mixes thinking and non-thinking members and each mode has its own
+    # recommended sampling. Holding sampling constant would run one arm off-spec
+    # and bias the comparison toward the other. This mirrors how the paper's own
+    # launcher picked settings, and it pairs with the two prompt files that
+    # data/prep_supergpqa.py writes.
+    "supergpqa": Task(
+        name="supergpqa",
+        parse=parse_supergpqa_answer,
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        min_p=0.0,
+        # Reasoning traces measured on this dataset reached 23,859 tokens on the
+        # hard split, and a truncated trace corrupts accuracy and cost together,
+        # so the cap sits well above that while leaving prompt room inside the
+        # 32,768-token native context.
+        max_tokens=30000,
+    ),
+    "supergpqa_nothink": Task(
+        name="supergpqa_nothink",
+        parse=parse_supergpqa_answer,
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        min_p=0.0,
+        max_tokens=30000,
+    ),
+    # Gemma 4 (verified against google/gemma-4-E2B-it's generation_config.json,
+    # 2026-07-22): temperature 1.0, top_k 64, top_p 0.95, one setting for both
+    # arms since the model card does not distinguish thinking/non-thinking
+    # sampling the way Qwen3 does. max_tokens is NOT model-card guidance (the
+    # card's own examples cap at 1024/512 for short demo turns); it is set to
+    # match supergpqa's cap for comparability across the pool and because SuperGPQA
+    # reasoning traces run long. Both arms are pre_rendered: the thinking switch
+    # is baked into the prompt text by data/prep_gemma4_thinking.py, not applied
+    # by the benchmark, so the loader must not template these prompts again.
+    "supergpqa_gemma4": Task(
+        name="supergpqa_gemma4",
+        parse=parse_supergpqa_answer,
+        temperature=1.0,
+        top_p=0.95,
+        top_k=64,
+        min_p=0.0,
+        max_tokens=30000,
+        pre_rendered=True,
+    ),
+    "supergpqa_gemma4_nothink": Task(
+        name="supergpqa_gemma4_nothink",
+        parse=parse_supergpqa_answer,
+        temperature=1.0,
+        top_p=0.95,
+        top_k=64,
+        min_p=0.0,
+        max_tokens=30000,
+        pre_rendered=True,
+    ),
+    # Qwen3.6 (verified against Qwen/Qwen3.6-35B-A3B-FP8's own
+    # generation_config.json, 2026-07-22): temperature 1.0, top_k 20, top_p
+    # 0.95 -- notably NOT the 0.6 the original Qwen3 "supergpqa" task uses; an
+    # earlier run against this model under that task was off-spec on top of
+    # being truncated. max_tokens is raised well past 30000: that run's calc
+    # cluster averaged 19,718 tokens with 36.7% of requests hitting the 30k
+    # cap outright, consistent with the model card's "Thinking Preservation"
+    # feature making it more verbose than earlier Qwen3 generations. This task
+    # needs a served context larger than the usual 32,768 to leave room for
+    # both prompt and completion; see cre_eval.sbatch's MAXLEN argument.
+    "supergpqa_qwen36": Task(
+        name="supergpqa_qwen36",
+        parse=parse_supergpqa_answer,
+        temperature=1.0,
+        top_p=0.95,
+        top_k=20,
+        min_p=0.0,
+        max_tokens=45000,
     ),
     # TeleMath: telecom mathematical problems with numerical (float) answers,
     # scored by relative tolerance rather than exact match. Two arms, since the
