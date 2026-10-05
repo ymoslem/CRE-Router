@@ -331,11 +331,12 @@ Three ready-made serving configs are provided, all for 1 x A100:
 - [`example_config_teleqna.yaml`](src/cre_router/server/example_config_teleqna.yaml),
   TeleQnA at TPOT 20 ms, Gemma4-E4B escalating to Gemma4-26B;
 - [`example_config_telemath.yaml`](src/cre_router/server/example_config_telemath.yaml),
-  TeleMath at E2EL 25 s, Gemma4-E2B escalating to Gemma4-26B.
+  TeleMath at E2EL 25 s, Gemma4-E2B escalating to Gemma4-26B;
+- [`example_config_telemath_tpot.yaml`](src/cre_router/server/example_config_telemath_tpot.yaml),
+  TeleMath at TPOT 25 ms, Gemma4-E2B escalating to Qwen3-30B-A3B, with Gemma 4's
+  reasoning switched per model.
 
-Point each at your running vLLM servers, then `cre serve --config <file>`. The
-TeleMath TPOT routings cannot be served yet: they use Gemma 4 with reasoning
-on, and `cre serve` does not pass Gemma 4's thinking switch.
+Point each at your running vLLM servers, then `cre serve --config <file>`.
 
 ## Released artifacts
 

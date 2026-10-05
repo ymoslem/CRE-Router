@@ -1,0 +1,60 @@
+# Example serving config for the paper's TeleMath system on 1 x A100, TPOT routing.
+#
+# At B = 25 ms under TPOT, `cre fit` routes C0 and C2 to Qwen3-30B-A3B-Thinking,
+# C1 to Gemma4-E2B (thinking off) and C3 to Gemma4-26B (thinking on). Its Stage 2
+# plan gates C1 and escalates to Qwen3-30B; C3 is not gated, because Gemma4-26B
+# with thinking costs more per token than the target.
+#
+# Prerequisites:
+#   1. `cre cluster` (k = 4 on the TeleMath train split) and `cre fit` have
+#      produced artifacts/telemath_tpot/:
+#      cre fit --stats configs/telemath_stats_1xA100_Sep2026.json --budget 25 \
+#          --output artifacts/telemath_tpot
+#   2. One vLLM server per model. --max-model-len must cover the input and the
+#      output cap, 40,960 tokens with reasoning and 16,384 without:
+#      vllm serve google/gemma-4-E2B-it                 --port 8001 --max-model-len 32768
+#      vllm serve Qwen/Qwen3-30B-A3B-Thinking-2507-FP8   --port 8002 --max-model-len 45000
+#      vllm serve google/gemma-4-26B-A4B-it              --port 8003 --max-model-len 49152
+#
+# Then: cre serve --config example_config_telemath_tpot.yaml
+
+artifacts_dir: artifacts/telemath_tpot
+
+# Keys must match the model names used in the routing table (`cre fit` stats).
+# `params` are laid over every request sent to that model: the paper's sampling
+# settings, and Gemma 4's thinking switch, which vLLM reads from the chat template.
+models:
+  Gemma4-E2B:
+    litellm_model: hosted_vllm/google/gemma-4-E2B-it
+    api_base: http://127.0.0.1:8001/v1
+    params:
+      temperature: 0.7
+      top_p: 0.8
+      max_tokens: 16384
+      extra_body: {top_k: 20, min_p: 0, chat_template_kwargs: {enable_thinking: false}}
+  Qwen3-30B-A3B-Thinking-2507:
+    litellm_model: hosted_vllm/Qwen/Qwen3-30B-A3B-Thinking-2507-FP8
+    api_base: http://127.0.0.1:8002/v1
+    params:
+      temperature: 0.6
+      top_p: 0.95
+      max_tokens: 40960
+      extra_body: {top_k: 20, min_p: 0}
+  Gemma4-26B-A4B-think:
+    litellm_model: hosted_vllm/google/gemma-4-26B-A4B-it
+    api_base: http://127.0.0.1:8003/v1
+    params:
+      temperature: 0.6
+      top_p: 0.95
+      max_tokens: 40960
+      extra_body: {top_k: 20, min_p: 0, chat_template_kwargs: {enable_thinking: true}}
+
+# Stage 2: escalate Gemma4-E2B's low-quality outputs to Qwen3-30B.
+qe:
+  enabled: true
+  classifiers:
+    Gemma4-E2B:
+      checkpoint: ymoslem/ModernBERT-base-TeleMath-router-qe-classifier-binary-10ep-lr2e-05-e2b-5runs
+      base_tokenizer: answerdotai/ModernBERT-base
+      accept_threshold: 0.5
+      max_length: 4096

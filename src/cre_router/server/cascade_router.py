@@ -82,6 +82,24 @@ def extract_query(messages: list[dict]) -> str:
     raise ValueError("request has no user message to route")
 
 
+def backend_payload(request: dict, spec: dict) -> dict:
+    """The request sent to one backend: the client's request, minus its ``model``,
+    with the model's own ``params`` from the serving config laid over it.
+
+    ``params`` fixes what belongs to the model rather than to the client, such as
+    its sampling settings or Gemma 4's thinking switch, which vLLM reads from
+    ``extra_body: {chat_template_kwargs: {enable_thinking: true}}``. Keys under
+    ``extra_body`` are merged with the client's, the config winning a clash.
+    """
+    payload = {k: v for k, v in request.items() if k != "model"}
+    for key, value in (spec.get("params") or {}).items():
+        if key == "extra_body":
+            payload["extra_body"] = {**(payload.get("extra_body") or {}), **value}
+        else:
+            payload[key] = value
+    return payload
+
+
 def _extract_output(response: Any) -> tuple[str, int]:
     """Return (content, output_token_count) from a chat-completions response,
     guarding against a null ``content`` and a missing/zero token count."""
@@ -214,7 +232,7 @@ class CascadeRouter:
         litellm_router = litellm.Router(model_list=model_list)
 
         async def completion_fn(model: str, request: dict) -> Any:
-            payload = {k: v for k, v in request.items() if k != "model"}
+            payload = backend_payload(request, config["models"][model])
             return await litellm_router.acompletion(model=model, **payload)
 
         qe_predict_fns: dict[str, QEPredictFn] = {}

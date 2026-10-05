@@ -217,3 +217,33 @@ class TestArtifacts:
         back = RouterArtifacts.load(tmp_path)
         assert (back.cost_metric, back.escalation_target, back.gated_clusters) == (
             "e2el", STRONG, {"0": WEAK})
+
+
+class TestBackendPayload:
+    def test_model_params_override_the_client(self):
+        from cre_router.server.cascade_router import backend_payload
+
+        spec = {"params": {"temperature": 0.6,
+                           "extra_body": {"chat_template_kwargs": {"enable_thinking": True}}}}
+        req = {"model": "ignored", "messages": [], "temperature": 1.0,
+               "extra_body": {"top_k": 20}}
+        out = backend_payload(req, spec)
+        assert "model" not in out and out["temperature"] == 0.6
+        assert out["extra_body"] == {"top_k": 20, "chat_template_kwargs": {"enable_thinking": True}}
+
+    def test_no_params_passes_the_request_through(self):
+        from cre_router.server.cascade_router import backend_payload
+
+        assert backend_payload({"model": "m", "messages": [1]}, {}) == {"messages": [1]}
+
+    def test_example_configs_name_known_models(self):
+        """Each shipped config's models carry params only of a known shape."""
+        from pathlib import Path
+
+        import yaml
+
+        for path in (Path(__file__).parents[1] / "src" / "cre_router" / "server").glob("example_config_*.yaml"):
+            cfg = yaml.safe_load(path.read_text())
+            for name, spec in cfg["models"].items():
+                assert {"litellm_model", "api_base"} <= set(spec), (path.name, name)
+                assert isinstance(spec.get("params", {}), dict), (path.name, name)

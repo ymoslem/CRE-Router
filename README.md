@@ -50,8 +50,10 @@ The full workflow is driven by the `cre` CLI, one command per step:
 `cre cluster` → `cre evaluate` → `cre fit` → `cre qe-data` → `cre qe-train` → `cre serve`
 
 Serving (`cre serve`) switches between the live vLLM backends through [LiteLLM](https://github.com/BerriAI/litellm).
-Two commands sit outside this chain and work offline, with no GPU.
-`cre stats` builds the stats file `cre fit` reads from saved captures.
+Three commands sit outside this chain and work offline.
+`cre qe-cascade` replays a trained estimator over saved generations, to check it
+before serving.
+`cre stats` builds the stats file `cre fit` reads from saved captures, with no GPU.
 `cre compose` measures a routing's Stage 1 and Stage 1 + 2 accuracy, TPOT and
 E2EL on the batches that were served; use it for accurate results, and the
 paper's numbers come from it.
@@ -243,9 +245,11 @@ and config the same way once you see the shape of it.
    TeleQnA and TeleMath configs,
    [`example_config_teleqna.yaml`](src/cre_router/server/example_config_teleqna.yaml)
    and [`example_config_telemath.yaml`](src/cre_router/server/example_config_telemath.yaml),
-   are also provided. The TeleMath one serves the E2EL routing. The TPOT routings
-   use Gemma 4 with reasoning on, and `cre serve` cannot yet switch Gemma 4's
-   reasoning per model.
+   are also provided, and
+   [`example_config_telemath_tpot.yaml`](src/cre_router/server/example_config_telemath_tpot.yaml)
+   serves the TeleMath routing at a TPOT budget of 25 ms. A model's `params` in
+   the config are laid over each request sent to it, which is how a config sets
+   the paper's sampling and turns Gemma 4's reasoning on or off.
 
 4. Send a standard chat-completions request to the router on port 4000, not to
    a vLLM backend. The endpoint is OpenAI-compatible, so an existing client
