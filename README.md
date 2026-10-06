@@ -18,7 +18,7 @@ stronger model:
 - **Stage 1 (clustering-based routing).** Queries are embedded and
   clustered offline; each cluster is assigned to the model minimizing
   `Error(m, c) + lambda * Cost_norm(m)`, where `lambda` ($\lambda$, the cost weight) is
-  tuned once to `lambda*` ($\lambda^*$) to satisfy a latency budget (TPOT or E2EL).
+  tuned once to `lambda*` ($\lambda^{\ast}$) to satisfy a latency budget (TPOT or E2EL).
 - **Stage 2 (quality-estimation cascade).** A lightweight classifier
   inspects each efficient-model output and escalates low-quality answers to
   a stronger model. `cre fit` plans this stage from the routing: the target is
@@ -69,7 +69,7 @@ cre <command> --help
 |---|---|---|---|---|
 | `cre cluster` | Embeds training queries and fits k-means centroids (k chosen by Silhouette) | JSONL of training queries | `centroids.npy` and `router.json`; `train_assignments.jsonl` | `--k`, `--embedding-model` |
 | `cre evaluate` | Runs each model per cluster through vLLM's benchmark, scores answers, averages per-cluster error and TPOT. This is the slowest step; cost scales with model size, output length, and `--runs`, and it runs once per model. | dataset JSONL, a running vLLM server, fitted centroids | per-model entry in the stats JSON; raw runs under `results/` | `--runs`, `--concurrency`, `--save-generations`, `--artifacts` |
-| `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^*$ under the cost budget, and plans Stage 2: the escalation target and the clusters to gate | stats JSON, budget B | routing table, $\lambda^*$ and the Stage 2 plan in `router.json`; prints which estimators to train next | `--budget` (required), `--cost-metric`, `--error-tol`, `--escalate-to`, `--output` |
+| `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^{\ast}$ under the cost budget, and plans Stage 2: the escalation target and the clusters to gate | stats JSON, budget B | routing table, $\lambda^{\ast}$ and the Stage 2 plan in `router.json`; prints which estimators to train next | `--budget` (required), `--cost-metric`, `--error-tol`, `--escalate-to`, `--output` |
 | `cre qe-data` | Builds a gated model's estimator training data from its `cre evaluate` generations | the gated model's `*_generations.jsonl` on train and held-out questions | `train.jsonl` and `test.jsonl` for `cre qe-train` | `--train`, `--test`, `--out`, `--task` |
 | `cre qe-train` | Fine-tunes ModernBERT-base as the accept/escalate QE classifier | HF dataset of model outputs with correctness labels | QE classifier checkpoint | `--train-split`, `--eval-split`, `--learning-rate`, `--max-length` |
 | `cre qe-cascade` | Replays the trained QE over an efficient model's saved generations, composing per-cluster cascade accuracy and escalation counts | generations JSONL, the strong model's outcomes, a QE checkpoint | per-cluster cascade accuracy and escalations per run | `--clusters`, `--accept-threshold` |
@@ -133,7 +133,7 @@ targets the wrong version. Without flash-attn at all, pass
 ## Quickstart: routing table (no GPU)
 
 A standalone, zero-setup demo of the routing math itself, no serving and no
-GPU involved. Running it reproduces the paper's routing table and $\lambda^*$
+GPU involved. Running it reproduces the paper's routing table and $\lambda^{\ast}$
 selection directly from the checked-in stats, so you can see how Stage 1
 decides which model handles which cluster before setting up any backends.
 It is *not* a prerequisite for the end-to-end GPU-based serving,
@@ -141,7 +141,7 @@ which fits its own routing table as one of its steps (cf.
 [Quickstart: serve CRE-Router](#quickstart-serve-cre-router-gpu-required)).
 The per-cluster
 stats measured in the paper are checked in under
-[`configs/`](configs), so the routing table and budgeted $\lambda^*$ reproduce
+[`configs/`](configs), so the routing table and budgeted $\lambda^{\ast}$ reproduce
 without any GPU:
 
 ```bash
@@ -149,7 +149,7 @@ cre fit --stats configs/aime_stats_1xA100_Sep2026.json --budget 30
 ```
 
 This prints the Pareto analysis, the $\lambda$ sweep (routing regions), and the
-$\lambda^*$ selection. Regenerating the stats from scratch instead, by clustering
+$\lambda^{\ast}$ selection. Regenerating the stats from scratch instead, by clustering
 and measuring each model yourself, needs a GPU: see
 [Measuring your own pool](#measuring-your-own-pool-gpu-required) below.
 
@@ -233,7 +233,7 @@ and config the same way once you see the shape of it.
 
 3. Write a serving config. It carries only deployment wiring — the model pool
    (each model's endpoint) and the QE classifier checkpoints. The routing
-   table, $\lambda^*$, the escalation target and the gated clusters are read from
+   table, $\lambda^{\ast}$, the escalation target and the gated clusters are read from
    the artifacts, never set by hand. Point
    [`example_config_aime24.yaml`](src/cre_router/server/example_config_aime24.yaml)
    at your backends and serve:
@@ -355,7 +355,7 @@ throughout.
 
 An artifacts directory (written by `cre cluster` / `cre fit`) holds
 `centroids.npy`, `router.json`, and `train_assignments.jsonl`. `router.json`
-carries the embedding model, the routing table, $\lambda^*$, the budget, the cost
+carries the embedding model, the routing table, $\lambda^{\ast}$, the budget, the cost
 metric it was fitted under, the Stage 2 plan (escalation target and gated
 clusters), and the pool stats. `cre serve` reads the plan back, so the served
 system escalates exactly as `cre fit` planned.
