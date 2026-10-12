@@ -356,10 +356,10 @@ Everything is public on the Hugging Face Hub:
 | TeleQnA clustered questions (k = 2) | `ymoslem/TeleQnA-clustered-k2` |
 | TeleMath train / test split | `ymoslem/TeleMath-processed` |
 | AIME QE data | `ymoslem/AIME-24-25-26-router` |
-| TeleQnA QE data | `ymoslem/TeleQnA-router-qwen4bi-261012` (`-gemma4-e2b-261012`, `-gemma4-e4b-261012` for the baselines and the estimator table) |
+| TeleQnA QE data | `ymoslem/TeleQnA-router-qwen4bi-261012` (`-gemma4-e2b-261012` for CRE-Router on HybridLLM's two models) |
 | TeleMath QE data | `ymoslem/TeleMath-router` |
 | AIME QE classifier | `ymoslem/ModernBERT-base-AIME-24-25-26-router-qe-binary-vibethinker1.5b-5runs_1eval-10ep-lr5e-05` |
-| TeleQnA QE classifier | `ymoslem/ModernBERT-base-TeleQnA-router-qe-classifier-binary-10ep-lr2e-05-qwen4bi-1xA100-5runs-261012` (`...-gemma4e2b-...`, `...-gemma4e4b-...` likewise) |
+| TeleQnA QE classifier | `ymoslem/ModernBERT-base-TeleQnA-router-qe-classifier-binary-10ep-lr2e-05-qwen4bi-1xA100-5runs-261012` (`...-gemma4e2b-...` likewise) |
 | TeleMath QE classifiers | `ymoslem/ModernBERT-base-TeleMath-router-qe-classifier-binary-10ep-lr2e-05-e2b-5runs`, `...-e4b-think-5runs` |
 
 Fetch any split as JSONL with `python data/download.py --dataset <id>`.
