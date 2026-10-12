@@ -1,4 +1,4 @@
-"""Evaluate a trained QE classifier on its own (paper Appendix D).
+"""Evaluate a trained QE classifier on its own.
 
 Runs the accept/escalate classifier over a dataset split of model outputs and
 reports the classification metrics (accuracy, macro-F1, per-class scores, and
@@ -85,7 +85,7 @@ def evaluate_split(classifier, dataset_split, batch_size: int = 32) -> tuple[lis
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="cre qe-eval", description=__doc__.split("\n", 1)[0],
+    parser = argparse.ArgumentParser(prog="cre qe-eval", description="evaluate a trained QE classifier on its own (requires [qe])",
                                      formatter_class=HelpFormatter)
     parser.add_argument("--classifier", required=True, help="trained QE checkpoint")
     parser.add_argument("--dataset", required=True, help="HF dataset of model outputs")

@@ -25,6 +25,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
+from cre_router import __version__
 from cre_router.artifacts import RouterArtifacts
 from cre_router.clustering import DEFAULT_EMBEDDING_MODEL
 from cre_router.evaluate import TASKS
@@ -409,6 +410,7 @@ def main(argv: list[str] | None = None) -> None:
         prog="cre", description="Cluster, Route, Escalate: cost-aware LLM routing.",
         epilog="End to end: cluster -> evaluate (per model) -> fit -> qe-data -> "
                "qe-train -> serve. Offline, from saved captures: stats -> fit -> compose.")
+    parser.add_argument("--version", action="version", version=f"cre {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def command(name: str, help: str, **kw) -> argparse.ArgumentParser:
@@ -433,7 +435,7 @@ def main(argv: list[str] | None = None) -> None:
     p = command(
         "evaluate",
         "measure per-cluster accuracy, TPOT and E2EL for one model "
-        "(requires [eval] + a running vLLM server)",
+        "(requires [eval] + a running vLLM server, started with --no-enable-prefix-caching)",
     )
     p.add_argument("--task", required=True, choices=sorted(TASKS),
                    help="dataset task")

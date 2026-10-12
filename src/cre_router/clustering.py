@@ -1,4 +1,4 @@
-"""Stage 1: semantic clustering of queries (paper Sec. 4.2).
+"""Stage 1: semantic clustering of queries.
 
 Queries are embedded with a sentence-transformer (all-MiniLM-L6-v2 in the
 paper) and partitioned with k-means; the cluster count is selected by

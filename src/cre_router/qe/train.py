@@ -1,17 +1,17 @@
-"""Fine-tune a binary accept/escalate QE classifier (paper Sec. 5.1, App. C).
+"""Fine-tune a binary accept/escalate QE classifier.
 
 One config-driven entry point, with nothing specific to a benchmark. The
 dataset is expected to provide the columns ``question``, ``full_output``,
 ``num_tokens``, and ``decision_label`` (label 2, "continue", is folded into 0,
-"route"), as in the released HF datasets ``ymoslem/AIME-router``,
-``ymoslem/TeleQnA-router``, and ``ymoslem/TeleMath-router``. ``--dataset``
+"route"), as in the released HF datasets ``ymoslem/AIME-24-25-26-router``,
+``ymoslem/TeleQnA-router-qwen4bi-261012``, and ``ymoslem/TeleMath-router``. ``--dataset``
 also takes a local directory of ``train*.jsonl`` and ``test*.jsonl`` written
 by ``data/prep_qe.py``, which is how a classifier for a new pool is trained.
 
 ``--dataset`` plus ``--train-split`` and ``--eval-split`` is the whole interface;
 nothing here knows how a particular dataset is laid out. ``--eval-run`` is an
 optional extra for a split that repeats its questions across runs, such as
-``ymoslem/TeleQnA-router``, whose eval split holds five runs of the same 1,000
+``ymoslem/TeleQnA-router-qwen4bi-261012``, whose eval split holds five runs of the same 1,000
 questions where one is enough for early stopping. It is ignored where there is
 no ``run`` column.
 
@@ -41,7 +41,7 @@ from cre_router.textutils import HelpFormatter
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="cre qe-train", description=__doc__.split("\n", 1)[0],
+    parser = argparse.ArgumentParser(prog="cre qe-train", description="fine-tune a binary accept/escalate QE classifier (requires [qe])",
                                      formatter_class=HelpFormatter)
     parser.add_argument("--dataset", required=True, help="HF dataset with QE training data")
     parser.add_argument("--base-model", default="answerdotai/ModernBERT-base",

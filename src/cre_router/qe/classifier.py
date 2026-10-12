@@ -1,4 +1,4 @@
-"""Binary accept/escalate quality-estimation classifier (paper Sec. 5.1).
+"""Binary accept/escalate quality-estimation classifier.
 
 A fine-tuned ModernBERT sequence classifier inspects an efficient model's
 completion and decides whether to accept it or escalate the query to a

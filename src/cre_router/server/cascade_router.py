@@ -2,7 +2,7 @@
 
 Stage 1: embed the incoming query, assign it to the nearest training
 centroid, and send it to the model the offline routing table selected for
-that cluster (paper Sec. 4).
+that cluster.
 
 Stage 2: a quality estimator reads the answer of each gated cluster's model and
 escalates the answers it rejects to one strong model. The target and the gated
