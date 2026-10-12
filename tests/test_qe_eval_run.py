@@ -37,7 +37,7 @@ class TestWithARunColumn:
         assert sorted(data["question"]) == [f"q{i}" for i in range(7)]
 
     def test_keeps_every_cluster(self):
-        # The old default took cluster 0 run 0; filtering on run must not drop a cluster.
+        # Filtering on run must keep every cluster.
         data, _ = select_eval_run(five_runs(questions=6), 0, "eval")
         assert set(data["cluster"]) == {0, 1}
 

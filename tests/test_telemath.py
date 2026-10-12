@@ -58,9 +58,9 @@ class TestParseTelemathAnswer:
         ],
     )
     def test_fraction_answer(self, text, expected):
-        # A fraction is one value, not two separate numbers -- the naive
-        # "last number in the text" fallback used to read \frac{7}{6} as its
-        # denominator alone (6.0) rather than 7/6.
+        # A fraction is one value, not two separate numbers: a "last number in
+        # the text" fallback would read \frac{7}{6} as its denominator alone
+        # (6.0) rather than 7/6.
         assert parse_telemath_answer(text) == pytest.approx(expected)
 
     def test_boxed_with_unit_label(self):
@@ -117,9 +117,9 @@ class TestParseTelemathAnswer:
         ],
     )
     def test_pathological_input_is_fast(self, text):
-        # Degenerate/truncated generations used to send the number regex into
-        # O(n^2) backtracking and stall for hours. Parsing must stay well under a
-        # second regardless of output length.
+        # Degenerate or truncated generations can drive a naive number regex
+        # into O(n^2) backtracking. Parsing must stay well under a second
+        # regardless of output length.
         import time
 
         start = time.perf_counter()

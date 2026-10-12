@@ -126,8 +126,8 @@ class TestTransformationOnBinaryCorrectness:
 class TestCollapsedIsNotNoSignal:
     """The two degenerate cases are different and must not share a flag.
 
-    An earlier version compared spreads, so `collapsed` fed an empty slice to
-    `allclose` and reported True whenever the search found no signal anywhere.
+    Comparing spreads would report `collapsed` whenever the search found no
+    signal anywhere.
     """
 
     def test_no_signal_is_reported_separately(self):

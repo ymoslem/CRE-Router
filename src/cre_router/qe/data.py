@@ -39,13 +39,9 @@ def qe_row(gen: dict, task: str | None = None) -> dict:
         match = spec.match or (lambda p, g: p is not None and p == g)
         correct = bool(match(answer, gen.get("ground_truth_answer")))
     else:
-        # No task given, so the stored verdict is copied through. This is the
-        # hole that produced the first TeleMath QE classifiers: they were built
-        # from logs graded before the 2026-08-13 fixes, so every training label
-        # was the old grader's. Copying is still allowed, because AIME and
-        # TeleQnA logs are unaffected and re-parsing them needs no task, but it
-        # is never silent: a log that names a scorer older than the current one
-        # is refused outright.
+        # No task given, so the stored verdict is copied through. AIME and
+        # TeleQnA logs need no re-parsing, so copying is allowed, but a log that
+        # names a scorer older than the current one is refused outright.
         stored_version = gen.get("scorer_version")
         if stored_version is not None and stored_version < SCORER_VERSION:
             raise ValueError(

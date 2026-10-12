@@ -171,8 +171,8 @@ class TestRepresentativeLambda:
     reported for a region has to reproduce that region's assignment."""
 
     # Three models over two clusters, chosen so the crossovers land on round
-    # numbers (0.1, 0.2, 0.3, 0.5). Measured data rarely does, which is why the
-    # naming bug below stayed hidden.
+    # numbers (0.1, 0.2, 0.3, 0.5). Measured data rarely does, so these round
+    # crossovers test the naming at the exact bounds.
     POOL = [
         ModelStats(name="Small", tpot_ms=10.0, errors={"easy": 0.20, "hard": 0.60}),
         ModelStats(name="Mid", tpot_ms=30.0, errors={"easy": 0.10, "hard": 0.35}),
@@ -186,8 +186,8 @@ class TestRepresentativeLambda:
             assert assign(self.POOL, lam) == region.assignment
 
     def test_round_upper_bound_is_excluded(self):
-        """[0.1, 0.2) must not be named 0.2: rounding used to push the candidate
-        onto the exclusive bound, naming the next region's lambda."""
+        """[0.1, 0.2) must not be named 0.2: rounding must not push the candidate
+        onto the exclusive bound, which names the next region's lambda."""
         assert _nice_lambda(0.1, 0.2) < 0.2
 
     def test_prefers_the_fewest_decimals_that_fit(self):

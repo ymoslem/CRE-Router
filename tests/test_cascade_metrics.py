@@ -106,7 +106,7 @@ def test_shape_disagreements_raise_rather_than_broadcast():
 
 
 def test_a_capture_without_tpot_is_refused_not_reconstructed():
-    """0.3.0 captures lack `tpot`. Falling back would reinstate the bug."""
+    """Captures from 0.3.0 lack `tpot` and are refused rather than reconstructed."""
     old = {k: v for k, v in EFF.items() if k != "tpot"}
     n = np.zeros((2, 2), dtype=bool)
     with pytest.raises(KeyError):

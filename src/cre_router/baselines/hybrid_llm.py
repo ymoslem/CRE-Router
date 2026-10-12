@@ -151,10 +151,9 @@ class TransformationFit:
 
         Then ``trans`` is ``prob`` and the relaxation had no room to act. Tested
         against the ``t = 0`` labels directly rather than by comparing spreads:
-        two different label vectors can share a spread, and an earlier version
-        compared spreads and reported a collapse whenever the search found no
-        signal anywhere, which is a different situation entirely. See
-        :attr:`no_signal` for that one.
+        two different label vectors can share a spread, and comparing spreads
+        would also report a collapse when the search finds no signal anywhere,
+        which is a different situation that :attr:`no_signal` reports.
         """
         return bool(np.array_equal(self.labels, self.labels_at_zero))
 

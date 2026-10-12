@@ -2,7 +2,7 @@
 
 The load-bearing property is that `cost_metric="tpot"` (the default) leaves the
 published behaviour untouched, so every test here that exercises e2el has a tpot
-counterpart asserting the old path still answers the same way.
+counterpart asserting the default path answers the same way.
 """
 
 import pytest
