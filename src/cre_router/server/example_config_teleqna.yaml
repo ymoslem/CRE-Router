@@ -1,15 +1,15 @@
 # Example serving config for the paper's TeleQnA system on 1 x A100.
 #
-# At B = 20 ms, `cre fit` routes C0 to Gemma4-E4B and C1 to Gemma4-26B, so
+# At B = 20 ms, `cre fit` routes C0 to Qwen3-4B and C1 to Gemma4-26B, so
 # those are the two models to serve. `cre fit` also plans Stage 2, never
 # configured by hand: it gates C0 and escalates to Gemma4-26B.
 #
 # Prerequisites:
 #   1. `cre cluster` and `cre fit` have produced artifacts/teleqna/:
-#      cre fit --stats configs/teleqna_stats_1xA100_Sep2026.json --budget 20 --output artifacts/teleqna
+#      cre fit --stats configs/teleqna_stats_1xA100_Oct2026.json --budget 20 --output artifacts/teleqna
 #   2. One vLLM server per model. --max-model-len must cover input + the
 #      1,024-token TeleQnA generation:
-#      vllm serve google/gemma-4-E4B-it        --port 8001 --max-model-len 2048
+#      vllm serve Qwen/Qwen3-4B-Instruct-2507  --port 8001 --max-model-len 2048
 #      vllm serve google/gemma-4-26B-A4B-it    --port 8002 --max-model-len 2048
 #
 # Then: cre serve --config example_config_teleqna.yaml
@@ -18,20 +18,20 @@ artifacts_dir: artifacts/teleqna
 
 # Keys must match the model names used in the routing table (`cre fit` stats).
 models:
-  Gemma4-E4B:
-    litellm_model: hosted_vllm/google/gemma-4-E4B-it
+  Qwen3-4B:
+    litellm_model: hosted_vllm/Qwen/Qwen3-4B-Instruct-2507
     api_base: http://127.0.0.1:8001/v1
   Gemma4-26B:
     litellm_model: hosted_vllm/google/gemma-4-26B-A4B-it
     api_base: http://127.0.0.1:8002/v1
 
-# Stage 2: escalate Gemma4-E4B's low-quality outputs to Gemma4-26B.
+# Stage 2: escalate Qwen3-4B's low-quality outputs to Gemma4-26B.
 # TeleQnA completions are short, so max_length is 512 (vs 4096 for AIME).
 qe:
   enabled: true
   classifiers:
-    Gemma4-E4B:
-      checkpoint: ymoslem/ModernBERT-base-TeleQnA-router-qe-classifier-binary-10ep-lr2e-05-gemma4e4b-5runs_1eval
+    Qwen3-4B:
+      checkpoint: ymoslem/ModernBERT-base-TeleQnA-router-qe-classifier-binary-10ep-lr2e-05-qwen4bi-1xA100-5runs-261012
       base_tokenizer: answerdotai/ModernBERT-base
       accept_threshold: 0.5
       max_length: 512

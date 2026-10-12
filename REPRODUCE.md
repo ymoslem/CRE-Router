@@ -74,10 +74,11 @@ does and writes the file `cre fit` reads:
 
 ```bash
 mkdir -p stats
-for pool in aime_1xA100 aime_2xA100 teleqna_1xA100 teleqna_2xA100 telemath_1xA100 telemath_2xA100; do
-  bench=${pool%%_*}; basis=${pool#*_}
-  cre stats --pool configs/pools/${pool}_Sep2026.json --dataset hub/captures \
-      --out stats/${bench}_stats_${basis}_Sep2026.json
+for pool in aime_1xA100_Sep2026 aime_2xA100_Sep2026 teleqna_1xA100_Oct2026 teleqna_2xA100_Oct2026 \
+            telemath_1xA100_Sep2026 telemath_2xA100_Sep2026; do
+  bench=${pool%%_*}; rest=${pool#*_}
+  cre stats --pool configs/pools/${pool}.json --dataset hub/captures \
+      --out stats/${bench}_stats_${rest}.json
 done
 ```
 
@@ -92,7 +93,7 @@ for f in stats/*.json; do cmp "$f" "configs/$(basename "$f")" && echo "identical
 
 ```bash
 cre fit --stats stats/aime_stats_1xA100_Sep2026.json --budget 30
-cre fit --stats stats/teleqna_stats_1xA100_Sep2026.json --budget 20
+cre fit --stats stats/teleqna_stats_1xA100_Oct2026.json --budget 20
 cre fit --stats stats/telemath_stats_1xA100_Sep2026.json --budget 20
 cre fit --stats stats/telemath_stats_1xA100_Sep2026.json --budget 25
 cre fit --stats stats/telemath_stats_1xA100_Sep2026.json --budget 25000 --cost-metric e2el
@@ -108,8 +109,8 @@ split.
 | --- | --- | --- | --- | --- | --- | --- |
 | AIME, 1 x A100 | TPOT 30 ms | Qwen3-30B | VibeThinker-1.5B | Qwen3-30B | | 91.3% at 27.3 ms |
 | AIME, 2 x A100 | TPOT 20 ms | Qwen3-30B | VibeThinker-1.5B | Qwen3-30B | | 91.8% at 17.4 ms |
-| TeleQnA, 1 x A100 | TPOT 20 ms | Gemma4-E4B | Gemma4-26B | | | 72.2% at 19.4 ms |
-| TeleQnA, 2 x A100 | TPOT 15 ms | Qwen3-4B | Gemma4-26B | | | 71.9% at 13.4 ms |
+| TeleQnA, 1 x A100 | TPOT 20 ms | Qwen3-4B | Gemma4-26B | | | 72.1% at 18.9 ms |
+| TeleQnA, 2 x A100 | TPOT 15 ms | Qwen3-4B | Gemma4-26B | | | 72.0% at 13.4 ms |
 | TeleMath, 1 x A100 | TPOT 20 ms | Qwen3-30B-think | Gemma4-E2B | Qwen3-30B-think | Gemma4-E4B-think | 64.7% at 17.5 ms |
 | TeleMath, 1 x A100 | TPOT 25 ms | Qwen3-30B-think | Gemma4-E2B | Qwen3-30B-think | Gemma4-26B-think | 69.1% at 20.9 ms |
 | TeleMath, 1 x A100 | E2EL 25 s | Gemma4-26B | Gemma4-E2B | Gemma4-26B | Gemma4-26B | 65.0% at 23.5 s |
@@ -126,7 +127,7 @@ buys the most accurate routing on two cards, and E2EL at 25 s selects
 Gemma4-26B everywhere, so that system has no Stage 2 on two cards.
 
 What each pool prunes also depends on the hardware. On one card nothing in the
-TeleQnA pool is Pareto-dominated and the sweep has six regions; on two cards
+TeleQnA pool is Pareto-dominated and the sweep has five regions; on two cards
 Gemma4-E2B is dominated. In the TeleMath pool Gemma4-26B (non-thinking) is
 dominated under TPOT on one card. The routings are checked by tests in
 [`tests/test_routing.py`](tests/test_routing.py).
@@ -176,8 +177,8 @@ hold exactly the questions the probabilities escalate in that run, or
 | --- | --- | --- |
 | `aime_tpot_b30ms_1xA100` | 0.83778 / 19.545 ms / 348.82 s | 0.85067 / 20.108 ms / 362.71 s |
 | `aime_tpot_b20ms_2xA100` | 0.84667 / 12.734 ms / 227.64 s | 0.86978 / 13.527 ms / 246.12 s |
-| `teleqna_tpot_b20ms_1xA100` | 0.71740 / 17.599 ms / 0.79 s | 0.73716 / 20.819 ms / 0.97 s |
-| `teleqna_tpot_b15ms_2xA100` | 0.71020 / 12.270 ms / 0.58 s | 0.74256 / 15.287 ms / 0.75 s |
+| `teleqna_tpot_b20ms_1xA100` | 0.71040 / 18.178 ms / 0.85 s | 0.75128 / 24.075 ms / 1.18 s |
+| `teleqna_tpot_b15ms_2xA100` | 0.71200 / 13.023 ms / 0.63 s | 0.74672 / 16.914 ms / 0.85 s |
 | `telemath_tpot_b20ms_1xA100` | 0.58905 / 17.350 ms / 117.72 s | 0.64159 / 19.121 ms / 139.06 s |
 | `telemath_tpot_b25ms_1xA100` | 0.64677 / 20.442 ms / 182.29 s | 0.67383 / 21.453 ms / 194.07 s |
 | `telemath_e2el_b25s_1xA100` | 0.60000 / 19.349 ms / 25.85 s | 0.62289 / 21.694 ms / 28.23 s |
@@ -217,9 +218,11 @@ configuration that produced it, and there is no basis-less default:
 | --- | --- |
 | `*_1xA100_Sep2026.json` | 1 x A100 SXM 80 GB at concurrency 32, vLLM 0.19.0 |
 | `*_2xA100_Sep2026.json` | 2 x A100 SXM 80 GB (tensor parallel 2) at concurrency 32, vLLM 0.19.0 |
+| `teleqna_*_1xA100_Oct2026.json` | as `1xA100_Sep2026`, served with prefix caching off |
+| `teleqna_*_2xA100_Oct2026.json` | as `2xA100_Sep2026`, served with prefix caching off |
 
-The two Sep 2026 bases differ only in card count, so comparing them isolates
-what the hardware does to a routing.
+The two bases of each date differ only in card count, so comparing them
+isolates what the hardware does to a routing.
 
 ## Regenerating the data (GPU)
 
@@ -301,7 +304,7 @@ early-stops on test run 0:
 ```bash
 cre qe-train --dataset ymoslem/AIME-24-25-26-router --output-dir qe-aime \
     --max-length 4096 --learning-rate 5e-5 --eval-run 0
-cre qe-train --dataset ymoslem/TeleQnA-router-gemma4-e4b --output-dir qe-teleqna \
+cre qe-train --dataset ymoslem/TeleQnA-router-qwen4bi-261012 --output-dir qe-teleqna \
     --max-length 512 --learning-rate 2e-5 --eval-run 0
 cre qe-train --dataset ymoslem/TeleMath-router --train-split train_e2b --eval-split test_e2b \
     --output-dir qe-telemath-e2b --max-length 4096 --learning-rate 2e-5 --eval-run 0
@@ -330,7 +333,7 @@ Three ready-made serving configs are provided, all for 1 x A100:
 - [`example_config_aime24.yaml`](src/cre_router/server/example_config_aime24.yaml),
   AIME at TPOT 30 ms, VibeThinker-1.5B escalating to Qwen3-30B-A3B;
 - [`example_config_teleqna.yaml`](src/cre_router/server/example_config_teleqna.yaml),
-  TeleQnA at TPOT 20 ms, Gemma4-E4B escalating to Gemma4-26B;
+  TeleQnA at TPOT 20 ms, Qwen3-4B-Instruct escalating to Gemma4-26B;
 - [`example_config_telemath.yaml`](src/cre_router/server/example_config_telemath.yaml),
   TeleMath at E2EL 25 s, Gemma4-E2B escalating to Gemma4-26B;
 - [`example_config_telemath_tpot.yaml`](src/cre_router/server/example_config_telemath_tpot.yaml),
@@ -353,10 +356,10 @@ Everything is public on the Hugging Face Hub:
 | TeleQnA clustered questions (k = 2) | `ymoslem/TeleQnA-clustered-k2` |
 | TeleMath train / test split | `ymoslem/TeleMath-processed` |
 | AIME QE data | `ymoslem/AIME-24-25-26-router` |
-| TeleQnA QE data | `ymoslem/TeleQnA-router-gemma4-e4b` |
+| TeleQnA QE data | `ymoslem/TeleQnA-router-qwen4bi-261012` (`-gemma4-e2b-261012`, `-gemma4-e4b-261012` for the baselines and the estimator table) |
 | TeleMath QE data | `ymoslem/TeleMath-router` |
 | AIME QE classifier | `ymoslem/ModernBERT-base-AIME-24-25-26-router-qe-binary-vibethinker1.5b-5runs_1eval-10ep-lr5e-05` |
-| TeleQnA QE classifier | `ymoslem/ModernBERT-base-TeleQnA-router-qe-classifier-binary-10ep-lr2e-05-gemma4e4b-5runs_1eval` |
+| TeleQnA QE classifier | `ymoslem/ModernBERT-base-TeleQnA-router-qe-classifier-binary-10ep-lr2e-05-qwen4bi-1xA100-5runs-261012` (`...-gemma4e2b-...`, `...-gemma4e4b-...` likewise) |
 | TeleMath QE classifiers | `ymoslem/ModernBERT-base-TeleMath-router-qe-classifier-binary-10ep-lr2e-05-e2b-5runs`, `...-e4b-think-5runs` |
 
 Fetch any split as JSONL with `python data/download.py --dataset <id>`.

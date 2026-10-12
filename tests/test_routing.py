@@ -40,12 +40,12 @@ Q = "Qwen3-30B-A3B"
 # runs on two cards; the one-card pool has different crossovers and different
 # pruning, covered by TestOneCardBasis.
 TWO_CARD = {"aime": "aime_stats_2xA100_Sep2026.json",
-            "teleqna": "teleqna_stats_2xA100_Sep2026.json"}
+            "teleqna": "teleqna_stats_2xA100_Oct2026.json"}
 ONE_CARD = {"aime": "aime_stats_1xA100_Sep2026.json",
-            "teleqna": "teleqna_stats_1xA100_Sep2026.json"}
+            "teleqna": "teleqna_stats_1xA100_Oct2026.json"}
 #: The two-card routing specs the fits below must reproduce, with their budgets.
 AIME_ROUTING = ("aime_tpot_b20ms_2xA100_Sep2026.json", 20.0)
-TELEQNA_ROUTING = ("teleqna_tpot_b15ms_2xA100_Sep2026.json", 15.0)
+TELEQNA_ROUTING = ("teleqna_tpot_b15ms_2xA100_Oct2026.json", 15.0)
 #: Routing specs name a model by its tier; the stats files use a shorter name.
 STATS_NAME = {"Qwen3-4B-Instruct": "Qwen3-4B"}
 
@@ -519,13 +519,21 @@ class TestOneCardBasis:
         """The sharpest difference between the two bases.
 
         On two cards Gemma4-E2B is dominated and the sweep has three regions. On one card the whole pool is on the frontier and it has
-        six, so a config without its basis in the name cannot be read safely.
+        five, so a config without its basis in the name cannot be read safely.
         """
         models, _ = teleqna_1x
         kept, dropped = pareto_prune(models)
         assert [m.name for m in dropped] == []
         assert len(kept) == 4
-        assert len(routing_regions(models)) == 6
+        assert len(routing_regions(models)) == 5
+
+    def test_teleqna_20ms_on_one_card(self, teleqna_1x):
+        """The shipped one-card TeleQnA routing: C0 to Qwen3-4B, C1 to Gemma4-26B."""
+        models, sizes = teleqna_1x
+        stats = _raw(ONE_CARD["teleqna"])
+        sel = select_lambda(models, sizes, 20.0, error_tol_from_stats(stats))
+        assert sel.region.assignment == _spec_assignment("teleqna_tpot_b20ms_1xA100_Oct2026.json")
+        assert sel.region.assignment == {"0": "Qwen3-4B", "1": "Gemma4-26B"}
 
     def test_the_two_bases_really_do_disagree(self, teleqna, teleqna_1x):
         two_card, _ = teleqna
@@ -629,16 +637,16 @@ class TestTwoCardsAimeTeleQnA:
         assert set(sel.region.assignment.values()) == {Q}
 
     def test_teleqna_15ms(self):
-        sel = self._fit("teleqna_stats_2xA100_Sep2026.json", 15.0)
+        sel = self._fit("teleqna_stats_2xA100_Oct2026.json", 15.0)
         assert sel.region.assignment == {"0": "Qwen3-4B", "1": "Gemma4-26B"}
-        assert sel.accuracy == pytest.approx(0.719, abs=5e-4)
+        assert sel.accuracy == pytest.approx(0.7196, abs=5e-4)
 
     def test_teleqna_20ms_is_always_strong(self):
-        sel = self._fit("teleqna_stats_2xA100_Sep2026.json", 20.0)
+        sel = self._fit("teleqna_stats_2xA100_Oct2026.json", 20.0)
         assert set(sel.region.assignment.values()) == {"Gemma4-26B"}
 
     def test_teleqna_prunes_e2b_only(self):
-        stats = json.loads((CONFIGS / "teleqna_stats_2xA100_Sep2026.json").read_text())
+        stats = json.loads((CONFIGS / "teleqna_stats_2xA100_Oct2026.json").read_text())
         models, _ = models_from_stats(stats, "tpot")
         _, dropped = pareto_prune(models)
         assert [m.name for m in dropped] == ["Gemma4-E2B"]

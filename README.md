@@ -161,11 +161,22 @@ those stats in the first place: every model in the pool is run over your dataset
 and measured per cluster. It is the experiments path, and the slowest part of the
 pipeline.
 
+Each model is measured while a vLLM server is serving it. Start the server in
+its own terminal, since it keeps running, with prefix caching off: every run
+resends the same prompts, so with caching on, runs after the first skip their
+prefill and the measured cost comes out lower.
+
+```bash
+vllm serve WeiboAI/VibeThinker-1.5B --port 8000 --max-model-len 42000 --no-enable-prefix-caching
+```
+
+Then, in another terminal:
+
 ```bash
 # 1. embed and cluster the training queries
 cre cluster --input data/aime_train.jsonl --output artifacts/aime
 
-# 2. measure each model against a vLLM backend serving it (repeat per model)
+# 2. measure the served model (repeat per model, restarting the server for each)
 cre evaluate --task aime --model WeiboAI/VibeThinker-1.5B \
     --dataset data/aime_train.jsonl --artifacts artifacts/aime \
     --stats-out configs/aime_stats.json --runs 5 --save-generations

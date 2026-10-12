@@ -1,0 +1,19 @@
+{
+ "name": "TeleQnA, TPOT routing, B = 20 ms, Stage 1 + 2",
+ "_basis": "TeleQnA test split, 1,000 questions, 1 x A100 80 GB, vLLM 0.19.0, concurrency 32, prefix caching off, 5 runs of every tier and escalation batch",
+ "_probs": "accept probabilities: ymoslem/cluster-route-escalate-scores, source_file teleqna_cold_20261012/qe_dumps/q4bi_1x/qe_preds__TeleQnA-q4bi_1x-cold__test__qwen4binstruct-cold-on-1xA100-cold.jsonl",
+ "tau": 0.5,
+ "runs": 5,
+ "tiers": {
+  "Qwen3-4B-Instruct": "tq1gnc_test_q4bi",
+  "Gemma4-26B": "tq1gnc_test_26b"
+ },
+ "assign": {
+  "0": "Qwen3-4B-Instruct",
+  "1": "Gemma4-26B"
+ },
+ "gated": {
+  "0": "tesc1x_cq4_c0"
+ },
+ "strong": "Gemma4-26B"
+}

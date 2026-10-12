@@ -28,7 +28,8 @@ def _fit_inputs(path: Path):
     bench, *_rest = path.stem.split("_")
     term = "e2el" if "_e2el_" in path.stem else "tpot"
     cards = next(p for p in path.stem.split("_") if p.endswith("A100"))
-    stats = json.loads((CONFIGS / f"{bench}_stats_{cards}_Sep2026.json").read_text())
+    date = path.stem.rsplit("_", 1)[-1]
+    stats = json.loads((CONFIGS / f"{bench}_stats_{cards}_{date}.json").read_text())
     return models_from_stats(stats, term)
 
 
