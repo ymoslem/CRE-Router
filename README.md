@@ -203,20 +203,25 @@ the per-question outputs Stage 2 trains on, and is worth passing even if you onl
 want Stage 1 today. [REPRODUCE.md](REPRODUCE.md) carries the full worked sequence,
 including the QE classifier stages.
 
-### Near-equal error rates
+### Near-ties
 
-A cluster of `n` questions cannot resolve accuracy any finer than `1/n`, so a
-model chosen on a smaller error difference than that is chosen on noise. Stage 1
-therefore treats two models whose per-cluster error rates differ by no more than
-`--error-tol` (default `0.001`, one tenth of a percentage point) as
-indistinguishable on accuracy, and picks the cheaper of them. The same tolerance
-applies to Pareto pruning, on both halves of the domination test.
+`cre fit` lists, under "Near-ties", any routing decision the training data
+cannot resolve. Two options control how such ties are handled.
 
-It is a robustness guard rather than a tuned parameter. On every pool in this
-repository it selects exactly what an exact comparison selects: the smallest
-non-zero error gap that any sweep actually rests on is 0.0038, nearly four times
-the tolerance. Set it from the stats file with `"error_tol"`, or per run with
-`--error-tol`; pass `--error-tol 0` for an exact comparison.
+| Option | Compares | On a tie | Default |
+| --- | --- | --- | --- |
+| `--error-tol` | two models within one cluster, also in Pareto pruning | the cheaper model is chosen | `0.001`, unless the stats file sets `"error_tol"` |
+| `--crossover-tol` | the switching points of two clusters | the routing that switches the clusters in the other order is also considered, and the budget picks between them | `0` (off) |
+
+`--crossover-tol` takes a number, the largest gap between two clusters' lambda
+crossovers treated as a tie, or `auto`, which ties every gap below twice its
+standard error. When the selected routing comes from a tie, no lambda reaches
+it, and `lambda*` is reported as none. Pass `--error-tol 0` for an exact
+comparison within clusters.
+
+```bash
+cre fit --stats configs/teleqna_stats_1xA100_Oct2026.json --budget 20 --crossover-tol auto
+```
 
 ## Quickstart: serve CRE-Router (GPU required)
 

@@ -33,12 +33,15 @@ from cre_router.textutils import HelpFormatter
 from cre_router.routing import (
     COST_CONDITIONING,
     DEFAULT_COST_CONDITIONING,
+    crossover_gaps,
     error_tol_from_stats,
+    is_tied,
     eta,
     models_from_stats,
     pareto_prune,
     routing_regions,
     select_lambda,
+    selection_margins,
     stage2_plan,
     system_metrics,
 )
@@ -130,13 +133,23 @@ def cmd_fit(args: argparse.Namespace) -> None:
             f"{e * eta_scale:>10.3f}" if e is not None else f"{'---':>10}")
         print(row)
 
+    crossover_tol = _crossover_tol(args.crossover_tol)
     selection = select_lambda(efficient, cluster_sizes, args.budget, error_tol,
-                              args.cost_conditioning)
-    print(f"\nBudget B = {args.budget} ms {label}  ->  lambda* = {selection.lambda_star}")
+                              args.cost_conditioning, crossover_tol)
+    if selection.region.swapped:
+        a, b = selection.region.swapped
+        lam_text = (f"none (C{b} switched before C{a}, a crossover order the data "
+                    f"cannot resolve; no lambda selects this routing)")
+    else:
+        lam_text = f"{selection.lambda_star}"
+    print(f"\nBudget B = {args.budget} ms {label}  ->  lambda* = {lam_text}")
     print(f"  assignment: {selection.region.assignment}")
     print(f"  training accuracy {selection.accuracy:.1%} at {selection.tpot_ms:.1f} ms {label}"
           + (f", eta {selection.eta * eta_scale:.3f} {eta_unit}"
              if selection.eta is not None else ""))
+
+    _print_near_ties(efficient, cluster_sizes, selection, error_tol, args.cost_conditioning,
+                     crossover_tol)
 
     plan = stage2_plan(models, selection.region.assignment, cluster_sizes, args.escalate_to)
     if plan.target is None:
@@ -168,6 +181,49 @@ def cmd_fit(args: argparse.Namespace) -> None:
         artifacts.stats = stats
         artifacts.save(out_dir)
         print(f"Saved routing table to {out_dir}/router.json")
+
+
+def _crossover_tol(value: str) -> float | str:
+    if value == "auto":
+        return "auto"
+    try:
+        tol = float(value)
+    except ValueError:
+        raise SystemExit(f"--crossover-tol takes a number or 'auto', not {value!r}")
+    if tol < 0:
+        raise SystemExit(f"--crossover-tol must be non-negative, got {tol}")
+    return tol
+
+
+def _print_near_ties(models, cluster_sizes, selection, error_tol, cost_conditioning,
+                     crossover_tol) -> None:
+    """Report both kinds of near-tie, so the user can see what the data could not decide."""
+    lines = []
+    lam = selection.lambda_star
+    if lam is not None:
+        for c, m in selection_margins(models, lam, cluster_sizes, error_tol,
+                                      cost_conditioning).items():
+            if m.gap < 0:
+                lines.append(f"  C{c}: {m.chosen} and {m.runner_up} tied on error "
+                             f"(within --error-tol {error_tol:g}); the cheaper, {m.chosen}, "
+                             f"is chosen")
+    for g in crossover_gaps(models, cluster_sizes, error_tol, cost_conditioning):
+        tied = is_tied(g, crossover_tol)
+        if g.resolvable and not tied:
+            continue
+        state = "resolved" if g.resolvable else "unresolved"
+        if tied:
+            action = "both orders considered (--crossover-tol)"
+        elif crossover_tol != "auto" and crossover_tol > 0:
+            action = f"wider than --crossover-tol {crossover_tol:g}, so not considered"
+        else:
+            action = "set --crossover-tol to consider both orders"
+        lines.append(f"  C{g.lower.cluster}/C{g.upper.cluster}: switching order {state}, "
+                     f"crossovers {g.gap:.4f} apart against a standard error of "
+                     f"{g.se:.4f}; {action}")
+    if lines:
+        print("\nNear-ties:")
+        print("\n".join(lines))
 
 
 def cmd_compose(args: argparse.Namespace) -> None:
@@ -501,14 +557,20 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--budget", type=float, required=True,
                    help="cost budget B in ms, in the units of --cost-metric")
     p.add_argument("--error-tol", type=float, default=None,
-                   help="per-cluster error difference treated as indistinguishable, so the "
-                        "choice falls to cost; default reads 'error_tol' from --stats "
-                        "(0.001 if absent). Pass 0 for an exact comparison.")
+                   help="within one cluster, models whose error is within this of the "
+                        "best are tied and the cheaper is chosen; default reads 'error_tol' "
+                        "from --stats (0.001 if absent). Pass 0 for an exact comparison.")
+    p.add_argument("--crossover-tol", default="0",
+                   help="largest gap between two clusters' switching points (lambda "
+                        "crossovers) treated as a tie; for a tie the fit also considers the "
+                        "routing that switches the clusters in the other order. A number, or "
+                        "'auto' to tie every gap below twice its standard error (default: "
+                        "0, off)")
     p.add_argument(
         "--cost-conditioning", choices=COST_CONDITIONING, default=DEFAULT_COST_CONDITIONING,
-        help="whether Eq. 2 prices a model or a (model, cluster) pair: 'model' "
-             "prices one cost per model, as Eq. 2 is published; 'cluster' prices each "
-             "cluster on its own measurement and needs per-cluster costs",
+        help="whether the cost term prices a model or a (model, cluster) pair: 'model' "
+             "prices one cost per model; 'cluster' prices each cluster on its own "
+             "measurement and needs per-cluster costs",
     )
     p.add_argument("--cost-metric", choices=("tpot", "e2el"), default="tpot",
                    help="measurement used as Cost: 'tpot' or 'e2el' "

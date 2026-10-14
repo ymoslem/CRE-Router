@@ -1,8 +1,8 @@
 """Stage 1: cost-aware, cluster-level routing.
 
-Implements the routing score (paper Eq. 1-2), Pareto pruning (Sec. 4.3),
-crossover points and routing regions (Eq. 3, Sec. 4.4), lambda* selection
-under a TPOT budget (Eq. 4), and the efficiency metric eta (Eq. 5).
+Implements the routing score (Eq. 1-2), Pareto pruning, crossover points and
+routing regions (Eq. 3), lambda* selection under a budget (Eq. 4), the
+efficiency metric eta (Eq. 5), and the near-tie diagnostics.
 
 All functions operate on plain ``ModelStats`` records holding per-cluster
 error rates and TPOT measured once, offline, on the training corpus.
@@ -108,6 +108,10 @@ class Region:
     lam_min: float
     lam_max: float  # math.inf for the last region
     assignment: dict[str, str]  # cluster id -> model name
+    #: Set only on a routing no lambda reaches: the two clusters whose crossover
+    #: order was treated as tied, with the later one switched first. Its lambda
+    #: range is then the tie window, not a range that selects it.
+    swapped: tuple[str, str] | None = None
 
     @property
     def interval_str(self) -> str:
@@ -320,6 +324,131 @@ def selection_margins(
     return out
 
 
+@dataclass(frozen=True)
+class Crossover:
+    """One region boundary: the lambda at which ``cluster`` moves to a cheaper model.
+
+    ``se`` is the standard error of ``lam`` implied by the two error rates and
+    the cluster's size, treating the two models' errors as independent binomial
+    estimates. They answer the same questions, so this overstates the noise and
+    errs towards calling a crossover order unresolved.
+    """
+
+    lam: float
+    cluster: str
+    from_model: str
+    to_model: str
+    se: float
+
+
+@dataclass(frozen=True)
+class CrossoverGap:
+    """Two consecutive crossovers in different clusters, and whether the data
+    can order them.
+
+    The region between them is the only routing that switches ``lower.cluster``
+    without ``upper.cluster``. When ``gap`` is within the noise of the two
+    crossovers, the training data does not determine which cluster should
+    switch first, and the routing that switches ``upper.cluster`` first is as
+    well supported but reached by no lambda.
+    """
+
+    lower: Crossover
+    upper: Crossover
+
+    @property
+    def gap(self) -> float:
+        return self.upper.lam - self.lower.lam
+
+    @property
+    def se(self) -> float:
+        return math.hypot(self.lower.se, self.upper.se)
+
+    @property
+    def resolvable(self) -> bool:
+        """True when the gap exceeds twice its standard error."""
+        return self.gap >= 2.0 * self.se
+
+    @property
+    def ratio(self) -> float:
+        """Gap in standard errors. Below 2.0 the crossover order is unresolved."""
+        return self.gap / self.se if self.se else math.inf
+
+
+def crossover_gaps(
+    models: list[ModelStats],
+    cluster_sizes: dict[str, float],
+    error_tol: float = DEFAULT_ERROR_TOL,
+    cost_conditioning: str = DEFAULT_COST_CONDITIONING,
+) -> list[CrossoverGap]:
+    """Every pair of consecutive crossovers in different clusters along the sweep.
+
+    Purely diagnostic, like :func:`selection_margins`: it reads the regions
+    :func:`routing_regions` returns and never alters them. ``error_tol``
+    compares two models within one cluster; this compares the switching points
+    of two clusters, which no tolerance in :func:`assign` covers.
+
+    Only boundaries where a single cluster changes are paired, and only adjacent
+    ones, so three crossovers within noise of each other yield two pairs rather
+    than every order of the three.
+    """
+    costs = cost_table(models, cost_conditioning)
+    by_name = {m.name: m for m in models}
+    regions = routing_regions(models, error_tol, cost_conditioning)
+    bounds: list[Crossover | None] = []
+    for before, after in zip(regions, regions[1:]):
+        changed = [c for c in before.assignment if before.assignment[c] != after.assignment[c]]
+        if len(changed) != 1:
+            bounds.append(None)
+            continue
+        c = changed[0]
+        a, b = by_name[before.assignment[c]], by_name[after.assignment[c]]
+        n = float(cluster_sizes.get(c, 0) or 0)
+        dcost = abs(costs[a.name][c] - costs[b.name][c])
+        var = sum(e * (1.0 - e) for e in (a.errors[c], b.errors[c]))
+        se = math.sqrt(var / n) / dcost if n and dcost else math.inf
+        bounds.append(Crossover(after.lam_min, c, a.name, b.name, se))
+    return [CrossoverGap(lo, hi) for lo, hi in zip(bounds, bounds[1:])
+            if lo is not None and hi is not None and lo.cluster != hi.cluster]
+
+
+def is_tied(gap: CrossoverGap, crossover_tol: float | str) -> bool:
+    """Whether ``crossover_tol`` treats the two crossovers of ``gap`` as tied."""
+    if crossover_tol == "auto":
+        return not gap.resolvable
+    tol = float(crossover_tol)
+    return tol > 0.0 and gap.gap <= tol + _TOL_EPS
+
+
+def swapped_candidates(
+    models: list[ModelStats],
+    cluster_sizes: dict[str, float],
+    crossover_tol: float | str,
+    error_tol: float = DEFAULT_ERROR_TOL,
+    cost_conditioning: str = DEFAULT_COST_CONDITIONING,
+) -> list[Region]:
+    """The routings a tied crossover order adds: the later cluster switched first.
+
+    ``crossover_tol`` is the largest gap between two crossovers treated as a tie,
+    in lambda units (error units when the pair's normalised costs are 0 and 1),
+    or ``"auto"`` to tie every gap the data cannot resolve. 0 adds nothing.
+    """
+    if crossover_tol != "auto" and float(crossover_tol) <= 0.0:
+        return []
+    regions = routing_regions(models, error_tol, cost_conditioning)
+    out = []
+    for g in crossover_gaps(models, cluster_sizes, error_tol, cost_conditioning):
+        if not is_tied(g, crossover_tol):
+            continue
+        before = next(r for r in regions if r.lam_max == g.lower.lam)
+        table = dict(before.assignment)
+        table[g.upper.cluster] = g.upper.to_model
+        if table not in [r.assignment for r in regions + out]:
+            out.append(Region(g.lower.lam, g.upper.lam, table,
+                              swapped=(g.lower.cluster, g.upper.cluster)))
+    return out
+
+
 def dominates(
     a: ModelStats,
     b: ModelStats,
@@ -522,7 +651,8 @@ def eta(
 class Selection:
     """Result of budgeted lambda* selection."""
 
-    lambda_star: float
+    #: None when the selected routing is a swapped candidate no lambda reaches.
+    lambda_star: float | None
     region: Region
     accuracy: float
     tpot_ms: float
@@ -535,11 +665,20 @@ def select_lambda(
     budget_ms: float,
     error_tol: float = DEFAULT_ERROR_TOL,
     cost_conditioning: str = DEFAULT_COST_CONDITIONING,
+    crossover_tol: float | str = 0.0,
 ) -> Selection:
     """Eq. 4: among all routing regions, pick the one with the highest training
-    accuracy whose system TPOT satisfies the budget; ties favour lower TPOT."""
+    accuracy whose system TPOT satisfies the budget; ties favour lower TPOT.
+
+    ``crossover_tol`` adds, as further candidates, the routings that tied
+    crossover orders make available (see :func:`swapped_candidates`). Its
+    default of 0 adds none.
+    """
     best: tuple[float, float, Region] | None = None
-    for region in routing_regions(models, error_tol, cost_conditioning):
+    candidates = (routing_regions(models, error_tol, cost_conditioning)
+                  + swapped_candidates(models, cluster_sizes, crossover_tol, error_tol,
+                                       cost_conditioning))
+    for region in candidates:
         acc, tpot = system_metrics(models, region.assignment, cluster_sizes)
         if tpot > budget_ms:
             continue
@@ -559,7 +698,7 @@ def select_lambda(
         )
     acc, tpot, region = best
     return Selection(
-        lambda_star=region.representative_lambda,
+        lambda_star=None if region.swapped else region.representative_lambda,
         region=region,
         accuracy=acc,
         tpot_ms=tpot,
