@@ -9,6 +9,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # actions/checkout stores the pushed tag as a lightweight tag; fetch the
+      # annotated tag object, whose message holds the release notes.
+      - run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+      # Checked before anything is published, so a tag without notes stops here.
+      - run: |
+          if [ "$(git cat-file -t "$GITHUB_REF_NAME")" != tag ]; then
+            echo "::error::$GITHUB_REF_NAME is not an annotated tag; its message holds the release notes"
+            exit 1
+          fi
+          if [ -z "$(git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents:body)')" ]; then
+            echo "::error::the message of $GITHUB_REF_NAME has no body after its first line"
+            exit 1
+          fi
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -46,8 +59,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # the annotation lives on the tag object, not the commit
+      - run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+      # The notes are the tag message after its first line.
+      - run: git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents:body)' > notes.md
       - uses: actions/download-artifact@v4
         with:
           name: dist
@@ -58,7 +72,7 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/* --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-from-tag
+            gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md
           fi
         env:
           GH_TOKEN: ${{ github.token }}
