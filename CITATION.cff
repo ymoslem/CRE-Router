@@ -1,0 +1,51 @@
+cff-version: 1.2.0
+message: "If you use CRE-Router, please cite the paper below."
+title: "CRE-Router: Cluster, Route, Escalate"
+type: software
+authors:
+  - given-names: Yasmin
+    family-names: Moslem
+license: Apache-2.0
+repository-code: "https://github.com/ymoslem/CRE-Router"
+url: "https://pypi.org/project/cre-router/"
+keywords:
+  - llm
+  - routing
+  - cascades
+  - model-serving
+  - quality-estimation
+preferred-citation:
+  type: article
+  title: "Cluster, Route, Escalate: Cascaded Framework for Cost-Aware LLM Serving"
+  authors:
+    - given-names: Yasmin
+      family-names: Moslem
+    - given-names: Magdalena
+      family-names: Kacmajor
+    - given-names: Vasudevan
+      family-names: Nedumpozhimana
+    - given-names: Ammar
+      family-names: Abbas
+    - given-names: Solmaz
+      family-names: Panahi
+    - given-names: David
+      family-names: Lynch
+    - given-names: Zhuangzhuang
+      family-names: Nie
+    - given-names: Alexandros
+      family-names: Agapitos
+    - given-names: Aleksandar
+      family-names: Milenovic
+    - given-names: Hongmeng
+      family-names: Song
+    - given-names: Yucheng
+      family-names: Shi
+    - given-names: Yue
+      family-names: Pan
+    - given-names: Patricia
+      family-names: Buffini
+    - given-names: John D.
+      family-names: Kelleher
+  year: 2026
+  journal: "arXiv preprint arXiv:2606.27457"
+  url: "https://arxiv.org/abs/2606.27457"

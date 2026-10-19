@@ -81,6 +81,7 @@ include = [
   "img",
   "src/cre_router",
   "tests/test_*.py",
+  "CITATION.cff",
   "DEVELOP.md",
   "LICENSE",
   "README.md",
