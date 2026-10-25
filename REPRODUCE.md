@@ -209,6 +209,40 @@ nothing cheaper to escalate from, so that spec gates nothing and needs no
 cre compose --routing configs/routings/telemath_k1_tpot_b25ms_1xA100_Sep2026.json --dataset hub/captures
 ```
 
+### 5. Stage 2 cost estimated before deployment
+
+The budget bounds Stage 1, and Stage 2 adds to it. `estimate_stage2_cost`
+estimates what Stage 2 adds from the training statistics alone, assuming each
+gated cluster escalates exactly the efficient model's wrong answers. These are
+the estimates the paper reports:
+
+```python
+import json
+from cre_router.routing import (estimate_stage2_cost, error_tol_from_stats,
+                                models_from_stats, select_lambda, stage2_plan)
+
+stats = json.load(open("configs/telemath_stats_1xA100_Sep2026.json"))
+models, sizes = models_from_stats(stats, "tpot")
+assignment = select_lambda(models, sizes, 20, error_tol_from_stats(stats)).region.assignment
+est = estimate_stage2_cost(stats, assignment, stage2_plan(models, assignment, sizes))
+print(est.added_tpot_ms, est.added_e2el_s)  # 3.19 ms, 23.31 s
+```
+
+| stats | budget | added TPOT | added E2EL |
+| --- | --- | --- | --- |
+| `telemath_stats_1xA100` | TPOT 20 ms | 3.2 ms | 23.3 s |
+| `telemath_stats_1xA100` | TPOT 25 ms | 2.1 ms | 13.6 s |
+| `telemath_stats_1xA100` | E2EL 25 s | 3.1 ms | 3.3 s |
+| `telemath_stats_1xA100` | E2EL 120 s | 0.3 ms | 22.5 s |
+| `telemath_stats_2xA100` | TPOT 20 ms | 1.9 ms | 45.2 s |
+| `teleqna_stats_1xA100` | TPOT 20 ms | 5.0 ms | 0.25 s |
+| `teleqna_stats_2xA100` | TPOT 15 ms | 3.2 ms | 0.17 s |
+| `aime_stats_1xA100` | TPOT 30 ms | 1.5 ms | 18.5 s |
+| `aime_stats_2xA100` | TPOT 20 ms | 1.0 ms | 11.8 s |
+
+An E2EL budget is passed in milliseconds, as `cre fit` takes it (25 s is 25000).
+`tests/test_stage2_cost.py` checks every row.
+
 ### Configuration names
 
 Cost is a property of the serving setup, so every config names the

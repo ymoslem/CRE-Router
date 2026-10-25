@@ -629,6 +629,90 @@ def stage2_plan(
     return Stage2Plan(target=target.name if gated else None, gated=gated)
 
 
+@dataclass(frozen=True)
+class Stage2CostEstimate:
+    """What Stage 2 is expected to add to a routing's cost at inference.
+
+    Shares and costs are means per training query, weighted by cluster size.
+    ``escalated`` is the share of queries escalated; the ``stage1_*`` fields are
+    the routing without escalation, and the ``added_*`` fields what Stage 2 adds
+    to them. TPOT is in milliseconds, E2EL in seconds.
+    """
+
+    escalated: float
+    stage1_tpot_ms: float
+    stage1_e2el_s: float
+    added_tpot_ms: float
+    added_e2el_s: float
+
+    @property
+    def tpot_ms(self) -> float:
+        """Stage 1 + 2 TPOT."""
+        return self.stage1_tpot_ms + self.added_tpot_ms
+
+    @property
+    def e2el_s(self) -> float:
+        """Stage 1 + 2 E2EL."""
+        return self.stage1_e2el_s + self.added_e2el_s
+
+
+def estimate_stage2_cost(
+    stats: dict, assignment: dict[str, str], plan: Stage2Plan
+) -> Stage2CostEstimate:
+    """Estimate, before deployment, the TPOT and E2EL that Stage 2 adds to a routing.
+
+    Computed from the training statistics alone, assuming each gated cluster
+    escalates exactly the efficient model's wrong answers, at its training error
+    rate. An escalated query pays for both passes: its E2EL is the sum of the
+    two, and its TPOT charges both decodes to the strong model's tokens,
+    (TPOT_eff * steps_eff + TPOT_strong * steps_strong) / steps_strong, where a
+    pass's decode steps are recovered from the cluster's means as
+    (E2EL - TTFT) / TPOT. ``stats`` is a stats dict as read by
+    :func:`models_from_stats`, with per-cluster ``errors``, ``cluster_tpot_ms``,
+    ``cluster_e2el_ms`` and ``cluster_ttft_ms``; ``plan`` is the routing's
+    :func:`stage2_plan`.
+
+    A trained estimator escalates a different share: one that catches fewer of
+    the wrong answers adds less, one that also escalates right answers adds more.
+    """
+    raw = stats["models"]
+    sizes = {str(c): float(n) for c, n in stats["cluster_sizes"].items()}
+    total = sum(sizes.values())
+
+    def cost(model: str, cluster: str) -> tuple[float, float, float]:
+        m = raw[model]
+        return (float(m["cluster_tpot_ms"][cluster]), float(m["cluster_e2el_ms"][cluster]),
+                float(m["cluster_ttft_ms"][cluster]))
+
+    def decode_steps(tpot: float, e2el: float, ttft: float) -> float:
+        """Tokens after the first, the denominator of the serving stack's TPOT."""
+        return max(1.0, (e2el - ttft) / tpot)
+
+    escalated = s1_tpot = s1_e2el = s12_tpot = s12_e2el = 0.0
+    for c, n in sizes.items():
+        tpot, e2el, ttft = cost(assignment[c], c)
+        s1_tpot += n * tpot
+        s1_e2el += n * e2el
+        if plan.target is not None and c in plan.gated:
+            rate = float(raw[assignment[c]]["errors"][c])
+            s_tpot, s_e2el, s_ttft = cost(plan.target, c)
+            steps, s_steps = decode_steps(tpot, e2el, ttft), decode_steps(s_tpot, s_e2el, s_ttft)
+            esc_tpot = (tpot * steps + s_tpot * s_steps) / s_steps
+            s12_tpot += n * ((1.0 - rate) * tpot + rate * esc_tpot)
+            s12_e2el += n * (e2el + rate * s_e2el)
+            escalated += n * rate
+        else:
+            s12_tpot += n * tpot
+            s12_e2el += n * e2el
+    return Stage2CostEstimate(
+        escalated=escalated / total,
+        stage1_tpot_ms=s1_tpot / total,
+        stage1_e2el_s=s1_e2el / total / 1000.0,
+        added_tpot_ms=(s12_tpot - s1_tpot) / total,
+        added_e2el_s=(s12_e2el - s1_e2el) / total / 1000.0,
+    )
+
+
 def eta(
     models: list[ModelStats],
     assignment: dict[str, str],
