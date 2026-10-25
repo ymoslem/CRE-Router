@@ -211,10 +211,15 @@ cre compose --routing configs/routings/telemath_k1_tpot_b25ms_1xA100_Sep2026.jso
 
 ### 5. Stage 2 cost estimated before deployment
 
-The budget bounds Stage 1, and Stage 2 adds to it. `estimate_stage2_cost`
-estimates what Stage 2 adds from the training statistics alone, assuming each
-gated cluster escalates exactly the efficient model's wrong answers. These are
-the estimates the paper reports:
+The budget bounds Stage 1, and Stage 2 adds to it. If you would like to roughly
+estimate the cost of Stage 2 _before_ deployment, `estimate_stage2_cost`
+computes what it adds to TPOT and E2EL from the training statistics alone,
+assuming each gated cluster escalates exactly the efficient model's wrong
+answers. As with `cre fit`, an E2EL budget is passed in milliseconds (25 s is
+25000).
+
+<details>
+<summary>Example: TeleMath on one A100 at a TPOT budget of 20 ms</summary>
 
 ```python
 import json
@@ -228,20 +233,11 @@ est = estimate_stage2_cost(stats, assignment, stage2_plan(models, assignment, si
 print(est.added_tpot_ms, est.added_e2el_s)  # 3.19 ms, 23.31 s
 ```
 
-| stats | budget | added TPOT | added E2EL |
-| --- | --- | --- | --- |
-| `telemath_stats_1xA100` | TPOT 20 ms | 3.2 ms | 23.3 s |
-| `telemath_stats_1xA100` | TPOT 25 ms | 2.1 ms | 13.6 s |
-| `telemath_stats_1xA100` | E2EL 25 s | 3.1 ms | 3.3 s |
-| `telemath_stats_1xA100` | E2EL 120 s | 0.3 ms | 22.5 s |
-| `telemath_stats_2xA100` | TPOT 20 ms | 1.9 ms | 45.2 s |
-| `teleqna_stats_1xA100` | TPOT 20 ms | 5.0 ms | 0.25 s |
-| `teleqna_stats_2xA100` | TPOT 15 ms | 3.2 ms | 0.17 s |
-| `aime_stats_1xA100` | TPOT 30 ms | 1.5 ms | 18.5 s |
-| `aime_stats_2xA100` | TPOT 20 ms | 1.0 ms | 11.8 s |
+</details>
 
-An E2EL budget is passed in milliseconds, as `cre fit` takes it (25 s is 25000).
-`tests/test_stage2_cost.py` checks every row.
+The actual measured cost is what `cre compose` reports once Stage 2 runs
+([section 3](#3-stage-1--2-on-the-test-split)). The two differ because a
+trained Stage 2 does not escalate exactly the wrong answers.
 
 ### Configuration names
 
