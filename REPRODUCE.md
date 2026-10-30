@@ -50,8 +50,8 @@ environment behind the reported numbers see [Pinned environment](#pinned-environ
 
 Every model answer the paper scores was saved as it was served, with its
 output, its grade and its latency, and is released as
-[`ymoslem/cluster-route-escalate-captures`](https://huggingface.co/datasets/ymoslem/cluster-route-escalate-captures)
-(about 5 GB). The Stage 2 classifiers' accept probabilities on those answers are released as
+[`ymoslem/cluster-route-escalate-captures`](https://huggingface.co/datasets/ymoslem/cluster-route-escalate-captures).
+The Stage 2 classifiers' accept probabilities on those answers are released as
 [`ymoslem/cluster-route-escalate-scores`](https://huggingface.co/datasets/ymoslem/cluster-route-escalate-scores).
 From these two datasets the whole pipeline reruns without a GPU, with no model
 served and no classifier loaded.
