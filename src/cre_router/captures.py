@@ -244,7 +244,7 @@ def load_capture(
 def dataset_loader(dataset_dir: str | Path):
     """A ``load(tag)`` that reads captures from the released captures dataset.
 
-    ``dataset_dir`` is a download of ``ymoslem/cluster-route-escalate-captures``.
+    ``dataset_dir`` is a download of ``ymoslem/cre-serving-captures``.
     Its rows were built by this module's rules (graded by the task, joined on
     output length) and hold the same fields ``load_capture`` returns, so a
     composition gives the same numbers from either source. Needs ``pyarrow``,

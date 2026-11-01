@@ -50,15 +50,15 @@ environment behind the reported numbers see [Pinned environment](#pinned-environ
 
 Every model answer the paper scores was saved as it was served, with its
 output, its grade and its latency, and is released as
-[`ymoslem/cluster-route-escalate-captures`](https://huggingface.co/datasets/ymoslem/cluster-route-escalate-captures).
+[`ymoslem/cre-serving-captures`](https://huggingface.co/datasets/ymoslem/cre-serving-captures).
 The Stage 2 classifiers' accept probabilities on those answers are released as
-[`ymoslem/cluster-route-escalate-scores`](https://huggingface.co/datasets/ymoslem/cluster-route-escalate-scores).
+[`ymoslem/cre-decision-scores`](https://huggingface.co/datasets/ymoslem/cre-decision-scores).
 From these two datasets the whole pipeline reruns without a GPU, with no model
 served and no classifier loaded.
 
 ```bash
-hf download ymoslem/cluster-route-escalate-captures --repo-type dataset --local-dir hub/captures
-hf download ymoslem/cluster-route-escalate-scores --repo-type dataset --local-dir hub/scores
+hf download ymoslem/cre-serving-captures --repo-type dataset --local-dir hub/captures
+hf download ymoslem/cre-decision-scores --repo-type dataset --local-dir hub/scores
 ```
 
 Answers are graded again from the full output by each benchmark's own grader
@@ -379,8 +379,8 @@ Everything is public on the Hugging Face Hub:
 
 | purpose | HF Hub ID |
 | --- | --- |
-| Every served answer, graded, with its latency | `ymoslem/cluster-route-escalate-captures` |
-| Stage 2 accept probabilities on those answers | `ymoslem/cluster-route-escalate-scores` |
+| Every served answer, graded, with its latency | `ymoslem/cre-serving-captures` |
+| Stage 2 accept probabilities on those answers | `ymoslem/cre-decision-scores` |
 | AIME clustered training questions (1983-2023) | `ymoslem/AIME-clustered` |
 | AIME clustered test questions (2024-2026) | `ymoslem/AIME-24-25-26-clustered` |
 | TeleQnA clustered questions (k = 2) | `ymoslem/TeleQnA-clustered-k2` |

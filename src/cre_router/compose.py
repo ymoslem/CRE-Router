@@ -100,7 +100,7 @@ def load_accept_probs(path: str | Path, source_file: str | None = None
     """(qid, run) -> {"p_accept", "num_tokens"} from the estimator's output.
 
     ``path`` is either a JSONL dump, or a parquet config of the released scores
-    dataset, ``ymoslem/cluster-route-escalate-scores``; a parquet file holds
+    dataset, ``ymoslem/cre-decision-scores``; a parquet file holds
     several dumps, so ``source_file`` picks one (reading parquet needs the
     ``data`` extra).
     """
