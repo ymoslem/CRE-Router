@@ -443,6 +443,3 @@ Apache-2.0. See [LICENSE](LICENSE).
 }
 ```
 
-## Acknowledgements
-
-This work is funded by ADAPT Centre, Trinity College Dublin, and Huawei Ireland.
