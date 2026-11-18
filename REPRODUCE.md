@@ -424,7 +424,3 @@ Qwen and Gemma pools; vLLM's `transformers<5` pin is conservative).
       url={https://arxiv.org/abs/2606.27457}, 
 }
 ```
-
-## Acknowledgements
-
-This work is funded by ADAPT Centre, Trinity College Dublin, and Huawei Ireland.
