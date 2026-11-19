@@ -274,6 +274,7 @@ def cmd_stats(args: argparse.Namespace) -> None:
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
     from cre_router.evaluate import (
+        ONE_BATCH,
         cluster_sizes,
         evaluate_model,
         merge_model_into_stats,
@@ -352,6 +353,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         generations_out=generations_path,
         detail_dir=detail_dir,
         fill_load=getattr(args, "fill_load", False),
+        one_batch=getattr(args, "one_batch", False),
     )
 
     raw_path = Path(args.results_dir) / f"{stem}.jsonl"
@@ -373,7 +375,9 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     # Recorded on the file, so a capture served at a held load can never be read
     # as one served alone, or the other way round.
     entry["load_fill"] = bool(getattr(args, "fill_load", False))
-    sizes = cluster_sizes(dataset)
+    entry["one_batch"] = bool(getattr(args, "one_batch", False))
+    sizes = ({ONE_BATCH: len(dataset)} if getattr(args, "one_batch", False)
+             else cluster_sizes(dataset))
     merge_model_into_stats(args.stats_out, args.model, entry, sizes)
 
     print(f"\nPer-cluster results for {args.model}:")
@@ -509,6 +513,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--runs", type=int, default=5, help="inference repetitions to average")
     p.add_argument("--limit", type=int, default=None, help="only evaluate the first N queries (for quick smoke tests)")
     p.add_argument("--concurrency", type=int, default=32, help="vLLM benchmark max concurrency")
+    p.add_argument(
+        "--one-batch", action="store_true",
+        help="serve every row as ONE batch instead of one batch per cluster: a "
+             "model's whole routed traffic, Stage 1 clusters and escalations "
+             "together. Rows need their true cluster, a stage (1 or 2) and, for "
+             "stage 2, eff_run; all three are kept in the generations")
     p.add_argument(
         "--fill-load", action="store_true",
         help="hold the server at --concurrency requests in flight for as long as "

@@ -18,6 +18,13 @@ axis, the axis a Stage 1 baseline resamples; a gated cluster's efficient pass is
 priced on ``r``, because the escalation decision was made from that run's
 output. The two indices are not symmetric and must not be made so.
 
+That is the ``per_cluster`` basis. On the ``per_model`` basis (``Routing.basis``)
+every model instead served exactly the traffic the routing sends it as one
+batch: a model routed several clusters served them together, and the strong
+model served its own clusters together with each run's escalations. Each
+request is then priced from that one batch, and a capture that does not hold
+exactly the model's routed traffic is refused (``_compose_per_model``).
+
 Three things are refused rather than guessed:
 
 - A gated question with no accept probability. Treating it as accepted would
@@ -64,6 +71,17 @@ class Routing:
     captures, run ``r`` being ``<stem>_r<r>``, and clusters whose escalations
     were served together share a stem; ``strong`` is the model those
     escalations were served by, for the record.
+
+    ``basis`` says how the system was served. ``"per_cluster"`` (the default):
+    every model served each cluster as its own batch, and each run's escalations
+    as their own batch. ``"per_model"``: every model served exactly the traffic
+    the routing sends it, as one batch. Then ``tiers`` still fixes the clusters,
+    and prices a model only where it serves a single cluster; ``served`` names
+    the one-batch Stage 1 capture of every model that serves several clusters;
+    and ``strong_batch`` is the stem of the strong model's one-batch captures,
+    run ``r`` being ``<stem>_r<r>``, each holding the strong model's own Stage 1
+    clusters and run ``r``'s escalations together. Every gated cluster then maps
+    to ``strong_batch``.
     """
 
     tiers: Mapping[str, str]
@@ -73,11 +91,15 @@ class Routing:
     tau: float = 0.5
     runs: int = 5
     name: str = ""
+    basis: str = "per_cluster"
+    served: Mapping[str, str] = field(default_factory=dict)
+    strong_batch: str | None = None
 
     @classmethod
     def from_json(cls, path: str | Path) -> "Routing":
         d = json.loads(Path(path).read_text())
-        keys = {"tiers", "assign", "gated", "strong", "tau", "runs", "name"}
+        keys = {"tiers", "assign", "gated", "strong", "tau", "runs", "name",
+                "basis", "served", "strong_batch"}
         return cls(**{k: v for k, v in d.items() if k in keys})
 
 
@@ -186,6 +208,12 @@ def compose(routing: Routing, load: Callable[[str], Mapping],
     maps (qid, run) to the estimator's ``p_accept`` and the ``num_tokens`` of the
     answer it scored.
     """
+    if routing.basis == "per_model":
+        return _compose_per_model(routing, load, probs)
+    if routing.basis != "per_cluster":
+        raise ValueError(f"unknown basis {routing.basis!r}")
+    if routing.served or routing.strong_batch:
+        raise ValueError("served and strong_batch belong to the per_model basis")
     runs = routing.runs
     used = sorted(set(routing.assign.values()))
     caps = {name: load(routing.tiers[name]) for name in used}
@@ -247,6 +275,10 @@ def compose(routing: Routing, load: Callable[[str], Mapping],
         s12_parts.append(per_request_metrics(~off, esc, tier, strong))
         escalated[c] = [len(x) for x in sets]
 
+    return _finish(s1_parts, s1p_parts, s12_parts, escalated, by_cluster, runs)
+
+
+def _finish(s1_parts, s1p_parts, s12_parts, escalated, by_cluster, runs) -> Composition:
     def stack(parts):
         return tuple(np.concatenate([p[m] for p in parts], axis=0) for m in range(3))
 
@@ -264,3 +296,137 @@ def compose(routing: Routing, load: Callable[[str], Mapping],
         qids=[q for c in by_cluster for q in by_cluster[c]],
         grid_stage1=(a1, t1, e1), grid_stage1plus2=(a2, t2, e2),
         grid_stage1_paired=(a1p, t1p, e1p))
+
+
+def _check_one_batch(cap: Mapping, tag: str, runs: int, stage1: set[str],
+                     stage2: set[str] = frozenset(), eff_run: int | None = None) -> None:
+    """Refuse a one-batch capture that is not exactly the traffic it must hold.
+
+    It must have been served as one batch (every row carries the same batch
+    label), in every run, holding exactly ``stage1`` as Stage 1 rows and exactly
+    ``stage2`` as Stage 2 rows escalated from efficient run ``eff_run``.
+    """
+    labels = {row.get("batch") for row in cap.values()}
+    if None in labels or len(labels) != 1:
+        raise ValueError(f"{tag}: not served as one batch (batch labels {sorted(map(str, labels))})")
+    for r in range(runs):
+        got1 = {q for (q, rr), row in cap.items() if rr == r and row.get("stage") == 1}
+        got2 = {q for (q, rr), row in cap.items() if rr == r and row.get("stage") == 2}
+        if got1 != stage1:
+            raise ValueError(f"{tag} run {r}: {len(got1)} Stage 1 rows, the routing sends "
+                             f"this model {len(stage1)}; differ on {sorted(got1 ^ stage1)[:3]}")
+        if got2 != set(stage2):
+            raise ValueError(f"{tag} run {r}: {len(got2)} escalated rows, the routing "
+                             f"escalates {len(stage2)}; differ on {sorted(got2 ^ set(stage2))[:3]}")
+        bad = [q for (q, rr), row in cap.items()
+               if rr == r and row.get("stage") == 2 and row.get("eff_run") != eff_run]
+        if bad:
+            raise ValueError(f"{tag} run {r}: escalations from another efficient run, e.g. {bad[0]}")
+    extra = {rr for _, rr in cap} - set(range(runs))
+    if extra:
+        raise ValueError(f"{tag}: runs {sorted(extra)} beyond the {runs} expected")
+
+
+def _compose_per_model(routing: Routing, load: Callable[[str], Mapping],
+                       probs: Mapping[tuple[str, int], Mapping]) -> Composition:
+    """Stage 1 and Stage 1 + 2 when every model served exactly its routed traffic.
+
+    Each request is priced from the one batch its model served in this system:
+
+    - a model routed one cluster, on that cluster's batch in its ``tiers`` capture;
+    - a model routed several clusters, on its one-batch capture in ``served``;
+    - in Stage 1 + 2, the strong model's own clusters and every escalation, on
+      ``<strong_batch>_r<r>``, the batch it served while run ``r``'s escalations
+      arrived. Its own clusters are therefore priced on (r, s) in Stage 1 + 2:
+      escalations share its server and change what its other requests cost.
+
+    The escalation decisions must have scored the answers priced here, so a gated
+    cluster whose model serves several clusters needs accept probabilities for
+    that model's one-batch answers; the output-length check refuses any others.
+    """
+    runs = routing.runs
+    used = sorted(set(routing.assign.values()))
+    tiers = {name: load(routing.tiers[name]) for name in used}
+    qid2c = _clusters(routing, tiers)
+    by_cluster = {c: sorted((q for q, cc in qid2c.items() if cc == c),
+                            key=lambda q: (len(q), q))
+                  for c in sorted(routing.assign)}
+    clusters_of = {m: sorted(c for c, mm in routing.assign.items() if mm == m) for m in used}
+    traffic = {m: set().union(*(by_cluster[c] for c in cs)) for m, cs in clusters_of.items()}
+
+    if set(routing.served) - set(used):
+        raise ValueError(f"served names models the routing does not use: "
+                         f"{sorted(set(routing.served) - set(used))}")
+    stage1_cap: dict[str, Mapping] = {}
+    for m in used:
+        if len(clusters_of[m]) == 1:
+            if m in routing.served:
+                raise ValueError(f"{m} serves one cluster, so its cluster batch is its whole "
+                                 f"traffic; a served capture for it would be a second source")
+            stage1_cap[m] = {k: v for k, v in tiers[m].items() if k[0] in traffic[m]}
+            continue
+        if m not in routing.served:
+            raise ValueError(f"{m} serves clusters {', '.join(clusters_of[m])}; on the per_model "
+                             f"basis it needs one batch holding all of them (served)")
+        cap = load(routing.served[m])
+        _check_one_batch(cap, routing.served[m], runs, traffic[m])
+        stage1_cap[m] = cap
+
+    if routing.gated:
+        if not routing.strong_batch or set(routing.gated.values()) != {routing.strong_batch}:
+            raise ValueError("on the per_model basis every gated cluster maps to strong_batch")
+        if routing.strong in {routing.assign[c] for c in routing.gated}:
+            raise ValueError("the strong model cannot be the efficient model of a gated cluster")
+    elif routing.strong_batch:
+        raise ValueError("strong_batch given but no cluster is gated")
+
+    esc_sets: dict[str, list[set[str]]] = {}
+    for c in routing.gated:
+        qs = by_cluster[c]
+        _check_pairing(probs, stage1_cap[routing.assign[c]], qs,
+                       f"cluster {c}, {routing.assign[c]}")
+        sets = []
+        for r in range(runs):
+            missing = [q for q in qs if (q, r) not in probs]
+            if missing:
+                raise ValueError(f"cluster {c} run {r}: {len(missing)} gated questions "
+                                 f"have no accept probability, e.g. {missing[0]}")
+            sets.append({q for q in qs if probs[(q, r)]["p_accept"] < routing.tau})
+        esc_sets[c] = sets
+
+    strong_own = traffic.get(routing.strong, set()) if routing.gated else set()
+    strong_r: list[Mapping | None] = [None] * runs
+    for r in range(runs):
+        want2 = set().union(*(esc_sets[c][r] for c in routing.gated)) if routing.gated else set()
+        if not want2 and not strong_own:
+            continue
+        tag = f"{routing.strong_batch}_r{r}"
+        cap = load(tag)
+        _check_one_batch(cap, tag, runs, strong_own, want2, eff_run=r)
+        strong_r[r] = cap
+
+    s1_parts, s1p_parts, s12_parts, escalated = [], [], [], {}
+    for c, qs in by_cluster.items():
+        m = routing.assign[c]
+        tier = _grids(stage1_cap[m], qs, runs)
+        off = np.zeros((len(qs), runs), dtype=bool)
+        s1_parts.append(per_request_metrics(off, ~off, tier, tier))
+        if c in routing.gated:
+            s1p_parts.append(per_request_metrics(~off, off, tier, [tier] * runs))
+            sets = esc_sets[c]
+            strong = [_grids(strong_r[r], qs, runs, keep=sets[r]) if sets[r] else tier
+                      for r in range(runs)]
+            esc = np.array([[q in sets[r] for r in range(runs)] for q in qs])
+            s12_parts.append(per_request_metrics(~off, esc, tier, strong))
+            escalated[c] = [len(x) for x in sets]
+        elif m == routing.strong and routing.gated:
+            # The strong model's own cluster in Stage 1 + 2: answered on the batch
+            # it shared with run r's escalations, so priced on (r, s).
+            own = [_grids(strong_r[r], qs, runs) for r in range(runs)]
+            s1p_parts.append(per_request_metrics(off, ~off, tier, tier))
+            s12_parts.append(per_request_metrics(off, ~off, own[0], own))
+        else:
+            s1p_parts.append(per_request_metrics(off, ~off, tier, tier))
+            s12_parts.append(per_request_metrics(off, ~off, tier, tier))
+
+    return _finish(s1_parts, s1p_parts, s12_parts, escalated, by_cluster, runs)

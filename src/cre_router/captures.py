@@ -81,6 +81,9 @@ class Request:
 
     #: Means of the batch this request was served in, as the run recorded them.
     batch: dict | None = None
+    #: For a capture served as one batch: the batch label, the row's stage and,
+    #: for Stage 2, the efficient run it escalates from.
+    provenance: dict | None = None
 
     def as_dict(self) -> dict:
         row = {"correct": self.correct, "correct_as_run": self.correct_as_run,
@@ -88,6 +91,7 @@ class Request:
                "tpot_ms": self.tpot_ms, "e2el_s": self.e2el_s,
                "cluster": self.cluster}
         row.update(self.batch or {})
+        row.update(self.provenance or {})
         return row
 
 
@@ -186,9 +190,18 @@ def load_capture(
     rows, _ = load_generations(tag, captures_dir)
     batches = batch_means(tag, captures_dir)
 
+    # A capture served as one batch labels every row with that batch and keeps the
+    # true cluster separately; the detail file and batch means are per batch.
     grouped: dict[tuple[str, int], list[dict]] = {}
     for row in rows:
-        grouped.setdefault((str(row["cluster"]), int(row["run"])), []).append(row)
+        label = str(row.get("batch", row["cluster"]))
+        grouped.setdefault((label, int(row["run"])), []).append(row)
+
+    def provenance(row: dict) -> dict | None:
+        if "batch" not in row:
+            return None
+        return {"batch": str(row["batch"]),
+                **{k: row[k] for k in ("stage", "eff_run") if k in row}}
 
     out: dict[tuple[str, int], dict] = {}
     for (cluster, run), group in sorted(grouped.items()):
@@ -203,11 +216,11 @@ def load_capture(
                 str(captures_dir / f"detail_{tag}" / f"*_c{cluster}_r{run}.json")):
             for row in group:
                 out[(str(row["qid"]), run)] = Request(
-                    qid=str(row["qid"]), cluster=str(cluster), run=run,
+                    qid=str(row["qid"]), cluster=str(row["cluster"]), run=run,
                     correct=bool(row["correct"]),
                     correct_as_run=bool(row["correct_as_run"]),
                     tokens=int(row["num_tokens"]), ttft_s=None, tpot_ms=None,
-                    e2el_s=None, batch=batch).as_dict()
+                    e2el_s=None, batch=batch, provenance=provenance(row)).as_dict()
             continue
         detail = json.loads(_detail_path(tag, captures_dir, cluster, run).read_text())
         if len(detail["ttfts"]) != len(group):
@@ -222,12 +235,15 @@ def load_capture(
                     f"positional join does not hold, so this detail file was not "
                     f"produced by these generations.")
             itl = detail["itls"][i]
+            if (str(row["qid"]), run) in out:
+                raise CaptureError(f"{tag}: question {row['qid']} run {run} appears twice")
             out[(str(row["qid"]), run)] = Request(
-                qid=str(row["qid"]), cluster=str(cluster), run=run,
+                qid=str(row["qid"]), cluster=str(row["cluster"]), run=run,
                 correct=bool(row["correct"]), correct_as_run=bool(row["correct_as_run"]),
                 tokens=tokens, ttft_s=detail["ttfts"][i],
                 tpot_ms=(sum(itl) / (tokens - 1) * 1000) if tokens > 1 else 0.0,
                 e2el_s=detail["ttfts"][i] + sum(itl), batch=batch,
+                provenance=provenance(row),
             ).as_dict()
 
     questions = {q for q, _ in out}

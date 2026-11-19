@@ -381,6 +381,35 @@ def cluster_sizes(dataset: list[dict]) -> dict[str, int]:
     return dict(Counter(str(row["cluster"]) for row in dataset))
 
 
+#: Batch label of a dataset served as one batch (``evaluate_model(one_batch=True)``).
+ONE_BATCH = "all"
+#: Row fields a one-batch dataset carries through to the generations and outcomes,
+#: so each answer stays tied to its true cluster, its stage and, for a Stage 2
+#: request, the efficient run whose answer it replaces.
+ROW_PROVENANCE = ("stage", "eff_run")
+
+
+def check_one_batch(dataset: list[dict]) -> None:
+    """Refuse a one-batch dataset whose rows cannot be told apart afterwards.
+
+    Every row needs its true ``cluster`` and a ``stage`` of 1 or 2; a Stage 2 row
+    (an escalated question) also needs ``eff_run``. Question ids must be unique,
+    since a question served twice in one batch would collide in every join.
+    """
+    seen: set[str] = set()
+    for i, row in enumerate(dataset):
+        if "cluster" not in row:
+            raise ValueError(f"row {i}: one-batch rows keep their true cluster")
+        if row.get("stage") not in (1, 2):
+            raise ValueError(f"row {i}: one-batch rows need stage 1 or 2, got {row.get('stage')!r}")
+        if row["stage"] == 2 and not isinstance(row.get("eff_run"), int):
+            raise ValueError(f"row {i}: a Stage 2 row needs the integer eff_run it escalates from")
+        q = question_id(row)
+        if q in seen:
+            raise ValueError(f"question {q} appears twice in one batch")
+        seen.add(q)
+
+
 # Optional per-run metrics. TPOT alone cannot price a thinking/non-thinking pool,
 # because both modes decode at the same speed and differ only in how many tokens
 # they emit; E2EL (= TTFT + TPOT x output length) captures that, and unlike
@@ -770,6 +799,7 @@ def evaluate_model(
     generations_out: str | Path | None = None,
     fill_load: bool = False,
     filler: Callable[..., Any] | None = None,
+    one_batch: bool = False,
 ) -> list[RunMeasurement]:
     """Benchmark ``model`` on each cluster for ``runs`` repetitions.
 
@@ -796,6 +826,13 @@ def evaluate_model(
     ``<detail_dir>/fill/`` with the detail file's name, a subdirectory so no
     detail glob can pick it up, and ``detail_dir`` is therefore required.
     ``filler`` replaces the class in tests.
+
+    With ``one_batch``, every row is served together as one batch, labelled
+    :data:`ONE_BATCH`, instead of one batch per ``cluster``. This is how a model
+    that serves several clusters, or Stage 1 questions and escalations together,
+    is measured on the traffic it really receives. Rows keep their true
+    ``cluster`` in the generations and outcomes, which also record the batch
+    label and each row's ``stage`` and ``eff_run`` (see :func:`check_one_batch`).
     """
     run_benchmark = benchmark or run_vllm_benchmark
     if fill_load and detail_dir is None:
@@ -810,7 +847,12 @@ def evaluate_model(
     measurements: list[RunMeasurement] = []
     outcomes: list[dict] | None = [] if outcomes_out is not None else None
     generations: list[dict] | None = [] if generations_out is not None else None
-    for cluster, items in split_by_cluster(dataset).items():
+    if one_batch:
+        check_one_batch(dataset)
+        groups = {ONE_BATCH: list(dataset)}
+    else:
+        groups = split_by_cluster(dataset)
+    for cluster, items in groups.items():
         split_path = workdir / f"{task.name}_cluster_{cluster}.jsonl"
         with split_path.open("w") as f:
             for item in items:
@@ -855,7 +897,9 @@ def evaluate_model(
                     outcomes.append(
                         {
                             "qid": question_id(item),
-                            "cluster": cluster,
+                            "cluster": str(item["cluster"]) if one_batch else cluster,
+                            **({"batch": cluster, **{k: item[k] for k in ROW_PROVENANCE if k in item}}
+                               if one_batch else {}),
                             "run": run,
                             "correct": bool(ok),
                             "output_len": olen,
@@ -872,7 +916,9 @@ def evaluate_model(
                     generations.append(
                         {
                             "qid": question_id(item),
-                            "cluster": cluster,
+                            "cluster": str(item["cluster"]) if one_batch else cluster,
+                            **({"batch": cluster, **{k: item[k] for k in ROW_PROVENANCE if k in item}}
+                               if one_batch else {}),
                             "run": run,
                             # ``question`` is the raw query the QE classifier and
                             # humans read; ``prompt`` is the exact served input
