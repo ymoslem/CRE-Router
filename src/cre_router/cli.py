@@ -351,6 +351,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         outcomes_out=outcomes_path,
         generations_out=generations_path,
         detail_dir=detail_dir,
+        fill_load=getattr(args, "fill_load", False),
     )
 
     raw_path = Path(args.results_dir) / f"{stem}.jsonl"
@@ -369,6 +370,9 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
               "Re-run without --no-save-generations / --no-detail to keep them.")
 
     entry = model_entry(measurements, max_output_tokens=task.max_tokens)
+    # Recorded on the file, so a capture served at a held load can never be read
+    # as one served alone, or the other way round.
+    entry["load_fill"] = bool(getattr(args, "fill_load", False))
     sizes = cluster_sizes(dataset)
     merge_model_into_stats(args.stats_out, args.model, entry, sizes)
 
@@ -505,6 +509,15 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--runs", type=int, default=5, help="inference repetitions to average")
     p.add_argument("--limit", type=int, default=None, help="only evaluate the first N queries (for quick smoke tests)")
     p.add_argument("--concurrency", type=int, default=32, help="vLLM benchmark max concurrency")
+    p.add_argument(
+        "--fill-load", action="store_true",
+        help="hold the server at --concurrency requests in flight for as long as "
+             "each benchmark runs, by replaying the batch's own prompts as "
+             "unmeasured fillers. For batches smaller than the concurrency limit, "
+             "such as escalated subsets, which otherwise run on a part-empty "
+             "server. Writes a load trace per (cluster, run) under <detail-dir>/fill. "
+             "Serve with prefix caching off: fillers replay the measured prompts, so "
+             "with caching on they would warm the cache for the measured requests")
     p.add_argument(
         "--max-output-tokens", type=int, default=None,
         help="lower the task's output cap for this run, for a model whose context "
