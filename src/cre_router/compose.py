@@ -93,6 +93,16 @@ class Composition:
     #: (accuracy, TPOT, E2EL) grids, each (question, efficient run, strong run).
     grid_stage1: tuple[np.ndarray, np.ndarray, np.ndarray]
     grid_stage1plus2: tuple[np.ndarray, np.ndarray, np.ndarray]
+    #: Stage 1 laid on Stage 1 + 2's run axes, for what Stage 2 adds: in a gated
+    #: cluster the efficient pass is priced on the efficient run ``r`` its
+    #: escalation was decided from, as in ``grid_stage1plus2``; elsewhere on ``s``,
+    #: as in ``grid_stage1``. ``grid_stage1plus2 - grid_stage1_paired`` is then
+    #: exactly zero for every answer Stage 2 keeps, and the difference comes only
+    #: from the escalated ones. ``grid_stage1`` prices every cluster on ``s``, so
+    #: subtracting it compares a gated question's efficient run ``r`` with a
+    #: different run ``s`` and adds their run-to-run spread to the difference.
+    #: Same mean as ``grid_stage1``; only the pairing of cells differs.
+    grid_stage1_paired: tuple[np.ndarray, np.ndarray, np.ndarray]
 
 
 def load_accept_probs(path: str | Path, source_file: str | None = None
@@ -214,14 +224,17 @@ def compose(routing: Routing, load: Callable[[str], Mapping],
                                  f"escalates {len(want)} in cluster(s) {', '.join(members)}")
             served[(stem, r)] = cap
 
-    s1_parts, s12_parts, escalated = [], [], {}
+    s1_parts, s1p_parts, s12_parts, escalated = [], [], [], {}
     for c, qs in by_cluster.items():
         tier = _grids(caps[routing.assign[c]], qs, runs)
         off = np.zeros((len(qs), runs), dtype=bool)
         s1_parts.append(per_request_metrics(off, ~off, tier, tier))
         if c not in routing.gated:
+            s1p_parts.append(per_request_metrics(off, ~off, tier, tier))
             s12_parts.append(per_request_metrics(off, ~off, tier, tier))
             continue
+        # The same Stage 1 answers, priced on the efficient run axis r.
+        s1p_parts.append(per_request_metrics(~off, off, tier, [tier] * runs))
         sets, stem = esc_sets[c], routing.gated[c]
         strong = [_grids(served[(stem, r)], qs, runs, keep=sets[r]) if sets[r] else None
                   for r in range(runs)]
@@ -238,6 +251,7 @@ def compose(routing: Routing, load: Callable[[str], Mapping],
         return tuple(np.concatenate([p[m] for p in parts], axis=0) for m in range(3))
 
     (a1, e1, t1), (a2, e2, t2) = stack(s1_parts), stack(s12_parts)
+    a1p, e1p, t1p = stack(s1p_parts)
 
     def mean25(acc, tpot, e2el):
         pairs = [(acc[:, r, s].mean(), tpot[:, r, s].mean(), e2el[:, r, s].mean())
@@ -248,4 +262,5 @@ def compose(routing: Routing, load: Callable[[str], Mapping],
         stage1=mean25(a1, t1, e1), stage1plus2=mean25(a2, t2, e2),
         escalated_per_run=escalated,
         qids=[q for c in by_cluster for q in by_cluster[c]],
-        grid_stage1=(a1, t1, e1), grid_stage1plus2=(a2, t2, e2))
+        grid_stage1=(a1, t1, e1), grid_stage1plus2=(a2, t2, e2),
+        grid_stage1_paired=(a1p, t1p, e1p))

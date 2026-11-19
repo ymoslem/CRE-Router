@@ -102,3 +102,25 @@ def test_clusters_can_share_one_escalation_batch():
     p[("q4", 0)]["p_accept"] = 0.1      # now run 0 escalates a question the batch lacks
     with pytest.raises(ValueError, match=r"escalates 3 in cluster\(s\) 0, 1"):
         compose(routing, caps.__getitem__, p)
+
+
+def test_paired_stage1_cancels_every_answer_stage2_keeps():
+    # B's cost differs between its two runs, so pricing a gated question on the
+    # wrong run shows up as a difference that Stage 2 did not cause.
+    b = {(q, r): {"correct": False, "tokens": 11, "tpot_ms": 20.0 + 20.0 * r,
+                  "e2el_s": 2.0 + 2.0 * r, "cluster": k}
+         for q, k in (("q1", "0"), ("q2", "0"), ("q3", "1"), ("q4", "1")) for r in range(RUNS)}
+    caps = {**CAPTURES, "b": b}
+    result = compose(ROUTING, caps.__getitem__, probs())
+    rows = {q: i for i, q in enumerate(result.qids)}
+    for s1, s1p, s12 in zip(result.grid_stage1, result.grid_stage1_paired,
+                            result.grid_stage1plus2):
+        assert s1p.mean() == pytest.approx(s1.mean())
+        diff = s12 - s1p
+        for q in ("q1", "q2", "q4"):          # never escalated: no Stage 2 effect
+            assert (diff[rows[q]] == 0).all()
+        assert (diff[rows["q3"]] != 0).any()
+    # The unpaired grid charges q4, which Stage 2 keeps, the run-to-run spread.
+    tpot_unpaired = result.grid_stage1plus2[1] - result.grid_stage1[1]
+    assert tpot_unpaired[rows["q4"], 0, 1] == pytest.approx(-20.0)
+    assert tpot_unpaired[rows["q4"], 1, 0] == pytest.approx(20.0)
