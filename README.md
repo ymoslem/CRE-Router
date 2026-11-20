@@ -57,6 +57,9 @@ before serving.
 `cre compose` measures a routing's Stage 1 and Stage 1 + 2 accuracy, TPOT and
 E2EL on the batches that were served; use it for accurate results, and the
 paper's numbers come from it.
+`cre batches` writes the batches that serve a fitted routing with each model
+receiving exactly its routed traffic, as one batch (see
+[Serving a routing as deployed](#serving-a-routing-as-deployed)).
 
 The main commands and options are summarized in the following table. For full
 flags for any command, run:
@@ -69,11 +72,12 @@ cre <command> --help
 |---|---|---|---|---|
 | `cre cluster` | Embeds training queries and fits k-means centroids (k chosen by Silhouette) | JSONL of training queries | `centroids.npy` and `router.json`; `train_assignments.jsonl` | `--k`, `--embedding-model` |
 | `cre evaluate` | Runs each model per cluster through vLLM's benchmark, scores answers, averages per-cluster error and TPOT. This is the slowest step; cost scales with model size, output length, and `--runs`, and it runs once per model. | dataset JSONL, a running vLLM server, fitted centroids | per-model entry in the stats JSON; raw runs under `results/` | `--runs`, `--concurrency`, `--save-generations`, `--artifacts` |
-| `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^{\ast}$ under the cost budget, and plans Stage 2: the escalation target and the clusters to gate | stats JSON, budget B | routing table, $\lambda^{\ast}$ and the Stage 2 plan in `router.json`; prints which estimators to train next | `--budget` (required), `--cost-metric`, `--error-tol`, `--escalate-to`, `--output` |
+| `cre fit` | Pareto-prunes the pool, sweeps $\lambda$, selects $\lambda^{\ast}$ under the cost budget, and plans Stage 2: the escalation target and the clusters to gate | stats JSON, budget B | routing table, $\lambda^{\ast}$ and the Stage 2 plan in `router.json`; prints which estimators to train next | `--budget` (required), `--cost-metric`, `--error-tol`, `--escalate-to`, `--selection`, `--output` |
 | `cre qe-data` | Builds a gated model's estimator training data from its `cre evaluate` generations | the gated model's `*_generations.jsonl` on train and held-out questions | `train.jsonl` and `test.jsonl` for `cre qe-train` | `--train`, `--test`, `--out`, `--task` |
 | `cre qe-train` | Fine-tunes ModernBERT-base as the accept/escalate QE classifier | HF dataset of model outputs with correctness labels | QE classifier checkpoint | `--train-split`, `--eval-split`, `--learning-rate`, `--max-length` |
 | `cre qe-cascade` | Replays the trained QE over an efficient model's saved generations, composing per-cluster cascade accuracy and escalation counts | generations JSONL, the strong model's outcomes, a QE checkpoint | per-cluster cascade accuracy and escalations per run | `--clusters`, `--accept-threshold` |
-| `cre stats` | Rebuilds per-cluster stats from saved captures, regrading every answer | pool spec, captures directory or the released captures dataset | stats JSON for `cre fit` | `--pool`, `--captures`, `--dataset` |
+| `cre stats` | Rebuilds per-cluster stats from saved captures, regrading every answer; prices a one-batch capture under any clustering of its questions | pool spec, captures directory or the released captures dataset | stats JSON for `cre fit` | `--pool`, `--captures`, `--dataset`, `--clusters` |
+| `cre batches` | Writes one batch per model holding exactly its routed traffic, then the strong model's batches with each run's escalations, and the routing spec `cre compose` reads | `router.json` from `cre fit`, each model's questions, accept probabilities | batch JSONL files, manifests with SHA-256, routing spec | `--router`, `--dataset`, `--prefix`, `--name`, `--probs` |
 | `cre compose` | Measures a routing's Stage 1 and Stage 1 + 2 accuracy, TPOT and E2EL from the batches that served it | routing spec, captures, accept probabilities | accuracy, TPOT, E2EL, escalations per run | `--routing`, `--dataset`, `--probs`, `--json` |
 | `cre serve` | Runs the live router: sends each incoming query to its cluster's assigned model, and escalates weak answers to a stronger model | serving config, running backends | live HTTP router on port 4000 | `--config`, `--port` |
 
@@ -202,6 +206,38 @@ is measured by repeating step 2 once per model. `--save-generations` also writes
 the per-question outputs Stage 2 trains on, and is worth passing even if you only
 want Stage 1 today. [REPRODUCE.md](REPRODUCE.md) carries the full worked sequence,
 including the QE classifier stages.
+
+### Serving a routing as deployed
+
+By default `cre evaluate` serves each cluster as its own batch. A deployed model
+receives every cluster routed to it at once, and its cost per token rises with
+the context its server holds, so a batch of one cluster runs lighter than the
+traffic it stands for. With `--one-batch`, `cre evaluate` serves the whole file
+as one batch in the row order given, keeping each row's true cluster, and every
+cost is then measured per request under that load. The sequence below fits and
+measures a routing this way:
+
+```bash
+# 1. each model serves the whole training set as one batch; rows need "stage": 1
+cre evaluate --one-batch --task telemath --model MODEL --dataset train_shuffled.jsonl ...
+# 2. per-cluster stats from those captures; --clusters prices another clustering
+cre stats --pool POOL --captures DIR --out stats.json
+cre stats --pool POOL --captures DIR --clusters train_k1.jsonl --out stats_k1.json
+# 3. fit; --selection exhaustive searches every assignment under the budget
+cre fit --stats stats.json --budget 20 --output artifacts/rt
+# 4. the Stage 1 batches: one per model, exactly its routed clusters
+cre batches --router artifacts/rt --dataset MODEL=test.jsonl ... \
+    --prefix p --name rt --out batches/
+# 5. serve each with cre evaluate --one-batch, and score the gated models' answers
+# 6. the strong model's batches: its own clusters plus each run's escalations
+cre batches --router artifacts/rt --dataset MODEL=test.jsonl ... \
+    --prefix p --name rt --out batches/ --probs scores.jsonl
+# 7. serve them, then measure the system on every batch it served
+cre compose --routing batches/rt_routing.json --captures DIR --probs scores.jsonl
+```
+
+Step 6 needs the scores of step 5's answers, since those are the answers the
+system escalates from.
 
 ### Near-ties
 
@@ -365,7 +401,13 @@ throughout.
 - **Routing spec** (`cre compose`): JSON with `tiers` (model name to test
   capture), `assign` (cluster to model), `gated` (cluster to escalation batch
   stem, one batch `<stem>_r<run>` per run), `strong`, `tau` (default 0.5) and
-  `runs`; see [`configs/routings/`](configs/routings).
+  `runs`; see [`configs/routings/`](configs/routings). `basis` is
+  `"per_cluster"` (the default: every cluster and every run's escalations served
+  as their own batches) or `"per_model"` (every model served its routed traffic
+  as one batch). A `per_model` spec adds `served` (the one-batch capture of each
+  model routed several clusters) and `strong_batch` (the stem of the strong
+  model's batches, run `r` holding its own clusters and run `r`'s escalations);
+  `cre batches` writes it.
 - **Serving config** (`cre serve`): YAML; see
   [`example_config_aime24.yaml`](src/cre_router/server/example_config_aime24.yaml).
 
@@ -388,6 +430,7 @@ cre-router/
 │   ├── captures.py              read saved captures: regrade answers, join cost per request
 │   ├── stats.py                 per-cluster stats from captures (`cre stats`)
 │   ├── compose.py               Stage 1 and Stage 1 + 2 from served batches (`cre compose`)
+│   ├── batches.py               one batch per model for a fitted routing (`cre batches`)
 │   ├── cascade.py               per-request Stage 1 + 2 cost, used by `cre compose`
 │   ├── bootstrap.py             confidence intervals over questions and runs
 │   ├── throughput.py            whole-run and steady-state output throughput

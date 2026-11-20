@@ -35,6 +35,7 @@ The workflow is driven by the `cre` CLI, one stage per step:
 `cre cluster` → `cre evaluate` → `cre fit` → `cre qe-data` → `cre qe-train` → `cre serve`
 
 Offline, from saved captures: `cre stats` → `cre fit` → `cre compose`.
+Serving a routing as deployed, one batch per model: `cre evaluate --one-batch` → `cre stats` → `cre fit` → `cre batches` → `cre evaluate --one-batch` → `cre compose`.
 
 Run `cre <stage> --help` for options. Runnable end-to-end quickstarts (a
 no-GPU routing-table demo and a full serving walkthrough) are in the
