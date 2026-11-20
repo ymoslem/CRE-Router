@@ -256,7 +256,7 @@ def cmd_compose(args: argparse.Namespace) -> None:
 
 def cmd_stats(args: argparse.Namespace) -> None:
     from cre_router.captures import dataset_loader, load_capture
-    from cre_router.stats import build_stats, load_pool
+    from cre_router.stats import build_stats, load_clusters, load_pool
 
     pool = load_pool(args.pool)
     if args.dataset:
@@ -264,7 +264,10 @@ def cmd_stats(args: argparse.Namespace) -> None:
         load = lambda tag: source(tag, require_cost=False)  # noqa: E731
     else:
         load = lambda tag: load_capture(tag, args.captures, require_cost=False)  # noqa: E731
-    stats = build_stats(pool, load)
+    clusters = load_clusters(args.clusters) if args.clusters else None
+    stats = build_stats(pool, load, clusters)
+    if args.clusters:
+        stats["clusters_from"] = str(args.clusters)
     out = Path(args.out)
     if out.exists() and not args.overwrite:
         raise SystemExit(f"{out} exists; pass --overwrite to replace it")
@@ -610,6 +613,10 @@ def main(argv: list[str] | None = None) -> None:
     src.add_argument("--captures", help="directory of raw captures, as cre evaluate saves them")
     src.add_argument("--dataset", help="download of the released captures dataset "
                                        "(needs the data extra)")
+    p.add_argument("--clusters", default=None,
+                   help="JSONL of the questions with a cluster on each row: price the "
+                        "captures under this clustering instead of the one they were "
+                        "served with (one-batch captures only), e.g. k = 1 or k = 2")
     p.add_argument("--out", required=True, help="stats JSON to write")
     p.add_argument("--overwrite", action="store_true", help="replace --out if it exists")
     p.set_defaults(func=cmd_stats)
