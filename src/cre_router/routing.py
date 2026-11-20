@@ -10,6 +10,7 @@ error rates and TPOT measured once, offline, on the training corpus.
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass, field
 
@@ -788,6 +789,50 @@ def select_lambda(
         tpot_ms=tpot,
         eta=eta(models, region.assignment, cluster_sizes, error_tol, cost_conditioning),
     )
+
+
+#: Largest number of assignments :func:`select_exhaustive` enumerates.
+EXHAUSTIVE_LIMIT = 10_000_000
+
+
+def select_exhaustive(
+    models: list[ModelStats],
+    cluster_sizes: dict[str, int | float],
+    budget_ms: float,
+    error_tol: float = DEFAULT_ERROR_TOL,
+) -> Selection:
+    """The most accurate routing whose training cost meets the budget, by search.
+
+    Enumerates every assignment of a pool model to each cluster and keeps those
+    whose system cost (:func:`system_metrics`) is within ``budget_ms``. Among
+    them it takes the highest training accuracy, and among routings within
+    ``error_tol`` of that accuracy the cheapest. Unlike :func:`select_lambda` it
+    is not limited to the routings some lambda selects, so it can spend budget
+    the sweep leaves unused; it has no lambda, and its cost grows as
+    ``len(models) ** len(clusters)``. Cost is each model's measured cost in each
+    cluster, so the cost conditioning does not apply.
+    """
+    clusters = sorted(cluster_sizes)
+    n = len(models) ** len(clusters)
+    if n > EXHAUSTIVE_LIMIT:
+        raise ValueError(f"{len(models)} models over {len(clusters)} clusters give {n:,} "
+                         f"routings, more than the {EXHAUSTIVE_LIMIT:,} searched")
+    feasible = []
+    for combo in itertools.product([m.name for m in models], repeat=len(clusters)):
+        assignment = dict(zip(clusters, combo))
+        acc, cost = system_metrics(models, assignment, cluster_sizes)
+        if cost <= budget_ms:
+            feasible.append((acc, cost, assignment))
+    if not feasible:
+        fastest = min(m.cost_ms for m in models) if models else float("nan")
+        raise ValueError(f"No routing satisfies budget {budget_ms} ms (cheapest single "
+                         f"model costs {fastest:.1f} ms)")
+    top = max(acc for acc, _, _ in feasible)
+    acc, cost, assignment = min((f for f in feasible if f[0] >= top - error_tol),
+                                key=lambda f: (f[1], -f[0]))
+    return Selection(lambda_star=None,
+                     region=Region(math.nan, math.nan, assignment),
+                     accuracy=acc, tpot_ms=cost, eta=None)
 
 
 def error_tol_from_stats(stats: dict) -> float:

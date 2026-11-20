@@ -11,6 +11,7 @@ from cre_router.routing import (  # noqa: F401
     normalized_costs,
     pareto_prune,
     routing_regions,
+    select_exhaustive,
     select_lambda,
     system_metrics,
 )

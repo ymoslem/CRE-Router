@@ -40,6 +40,7 @@ from cre_router.routing import (
     models_from_stats,
     pareto_prune,
     routing_regions,
+    select_exhaustive,
     select_lambda,
     selection_margins,
     stage2_plan,
@@ -134,9 +135,16 @@ def cmd_fit(args: argparse.Namespace) -> None:
         print(row)
 
     crossover_tol = _crossover_tol(args.crossover_tol)
-    selection = select_lambda(efficient, cluster_sizes, args.budget, error_tol,
-                              args.cost_conditioning, crossover_tol)
-    if selection.region.swapped:
+    if args.selection == "exhaustive":
+        # Every model, not only the Pareto-efficient ones: a model dominated within
+        # the error tolerance can still be part of the most accurate routing.
+        selection = select_exhaustive(models, cluster_sizes, args.budget, error_tol)
+    else:
+        selection = select_lambda(efficient, cluster_sizes, args.budget, error_tol,
+                                  args.cost_conditioning, crossover_tol)
+    if args.selection == "exhaustive":
+        lam_text = "none (exhaustive search over every assignment)"
+    elif selection.region.swapped:
         a, b = selection.region.swapped
         lam_text = (f"none (C{b} switched before C{a}, a crossover order the data "
                     f"cannot resolve; no lambda selects this routing)")
@@ -148,8 +156,9 @@ def cmd_fit(args: argparse.Namespace) -> None:
           + (f", eta {selection.eta * eta_scale:.3f} {eta_unit}"
              if selection.eta is not None else ""))
 
-    _print_near_ties(efficient, cluster_sizes, selection, error_tol, args.cost_conditioning,
-                     crossover_tol)
+    if args.selection == "sweep":
+        _print_near_ties(efficient, cluster_sizes, selection, error_tol,
+                         args.cost_conditioning, crossover_tol)
 
     plan = stage2_plan(models, selection.region.assignment, cluster_sizes, args.escalate_to)
     if plan.target is None:
@@ -176,6 +185,7 @@ def cmd_fit(args: argparse.Namespace) -> None:
         artifacts.budget_ms = args.budget
         artifacts.cost_metric = args.cost_metric
         artifacts.cost_conditioning = args.cost_conditioning
+        artifacts.selection = args.selection
         artifacts.escalation_target = plan.target
         artifacts.gated_clusters = plan.gated
         artifacts.stats = stats
@@ -593,6 +603,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--escalate-to", default=None,
                    help="Stage 2 escalation target; default is the most accurate model "
                         "the routing uses. Needed when the routing uses one model only")
+    p.add_argument("--selection", choices=("sweep", "exhaustive"), default="sweep",
+                   help="how the routing is chosen under the budget: 'sweep' takes the "
+                        "most accurate routing region of the lambda sweep (Eq. 4); "
+                        "'exhaustive' searches every assignment of a model to each "
+                        "cluster and can spend budget the sweep leaves unused "
+                        "(default: sweep)")
     p.add_argument("--output", default=None, help="artifacts directory to update")
     p.set_defaults(func=cmd_fit)
 

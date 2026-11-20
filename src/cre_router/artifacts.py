@@ -37,6 +37,10 @@ class RouterArtifacts:
     # written before this was recorded, hence the default, which is the fit
     # default and the published rule.
     cost_conditioning: str = "model"
+    # How the routing was chosen from the candidates: "sweep" (Eq. 4, the routing
+    # regions of the lambda sweep) or "exhaustive" (every assignment searched).
+    # Absent from artifacts written before this was recorded, hence the default.
+    selection: str = "sweep"
     # The Stage 2 plan ``cre fit`` derives from the routing (``stage2_plan``): the
     # model rejected answers escalate to, and each gated cluster with the Stage 1
     # model whose answers its estimator scores. Empty when there is no Stage 2.
