@@ -11,9 +11,13 @@
   cre serve       run the cascade router (requires [serve])
   cre stats       build the stats file cre fit reads from saved captures
   cre compose     measure Stage 1 and Stage 1 + 2 on the batches that were served
+  cre batches     write the batches that serve a fitted routing, one per model
 
 End to end: cluster -> evaluate (per model) -> fit -> qe-data -> qe-train -> serve.
 Offline, from saved captures: stats -> fit -> compose.
+Serving a routing as deployed: evaluate --one-batch (whole training set, per model)
+-> stats -> fit -> batches -> evaluate --one-batch -> score the gated answers
+-> batches --probs -> evaluate --one-batch -> compose.
 """
 
 from __future__ import annotations
@@ -262,6 +266,30 @@ def cmd_compose(args: argparse.Namespace) -> None:
         print(f"  {label:12s} accuracy {acc:.5f}   TPOT {tpot:.3f} ms   E2EL {e2el:.2f} s")
     for c, n in result.escalated_per_run.items():
         print(f"  cluster {c} escalations per run: {n}")
+
+
+def cmd_batches(args: argparse.Namespace) -> None:
+    from cre_router.batches import write_plan
+    from cre_router.compose import load_accept_probs
+
+    art = RouterArtifacts.load(args.router)
+    datasets = {}
+    for spec in args.dataset:
+        model, sep, path = spec.partition("=")
+        if not sep:
+            raise SystemExit(f"--dataset takes MODEL=PATH, not {spec!r}")
+        datasets[model] = _read_jsonl(Path(path))
+    probs = load_accept_probs(args.probs, args.probs_source) if args.probs else None
+    routing = write_plan(args.out, args.prefix, args.name, art.routing_table, datasets,
+                         strong=art.escalation_target, gated=sorted(art.gated_clusters),
+                         probs=probs, tau=args.tau, runs=args.runs, seed=args.seed)
+    step = "Stage 1 + 2" if probs is not None else "Stage 1"
+    print(f"wrote the {step} batches for {args.name} to {args.out}")
+    if art.gated_clusters and probs is None:
+        print("next: serve them with cre evaluate --one-batch, score the gated models' "
+              "answers, and run cre batches again with --probs")
+    elif "strong_batch" in routing or not art.gated_clusters:
+        print(f"routing file: {Path(args.out) / (args.name + '_routing.json')}")
 
 
 def cmd_stats(args: argparse.Namespace) -> None:
@@ -636,6 +664,23 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--out", required=True, help="stats JSON to write")
     p.add_argument("--overwrite", action="store_true", help="replace --out if it exists")
     p.set_defaults(func=cmd_stats)
+
+    p = command("batches", "write the one-batch-per-model batches that serve a fitted routing")
+    p.add_argument("--router", required=True, help="artifacts directory written by cre fit --output")
+    p.add_argument("--dataset", action="append", required=True, metavar="MODEL=PATH",
+                   help="the questions as MODEL is prompted, with their clusters; once per "
+                        "model the routing uses")
+    p.add_argument("--prefix", required=True, help="tag prefix, e.g. cvb")
+    p.add_argument("--name", required=True, help="routing name in the tags, e.g. tm1x_tpot20")
+    p.add_argument("--out", required=True, help="directory for the batches and manifests")
+    p.add_argument("--probs", default=None,
+                   help="accept probabilities for the gated models' Stage 1 answers: "
+                        "writes the strong model's Stage 1 + 2 batches")
+    p.add_argument("--probs-source", default=None, help="source_file within a parquet --probs")
+    p.add_argument("--tau", type=float, default=0.5, help="escalate when p_accept < tau")
+    p.add_argument("--runs", type=int, default=5, help="efficient-model runs, one strong batch each")
+    p.add_argument("--seed", type=int, default=0, help="row order within each batch")
+    p.set_defaults(func=cmd_batches)
 
     p = command(
         "compose",
