@@ -19,7 +19,6 @@ so nothing else depends on vLLM being importable.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import math
@@ -797,8 +796,6 @@ def evaluate_model(
     detail_dir: str | Path | None = None,
     outcomes_out: str | Path | None = None,
     generations_out: str | Path | None = None,
-    fill_load: bool = False,
-    filler: Callable[..., Any] | None = None,
     one_batch: bool = False,
 ) -> list[RunMeasurement]:
     """Benchmark ``model`` on each cluster for ``runs`` repetitions.
@@ -818,15 +815,6 @@ def evaluate_model(
     (``question [SEP] full_output [SEP] num_tokens`` -> correct), and like the
     generations themselves it is irrecoverable once the run ends.
 
-    With ``fill_load``, each (cluster, run) benchmark runs inside a
-    :class:`cre_router.load_fill.LoadFiller` that keeps ``max_concurrency``
-    requests in flight on the server for as long as the benchmark runs, replaying
-    the cluster's own prompts as unmeasured fillers. The benchmark's measurements
-    are of its own requests only. The filler's load trace is written under
-    ``<detail_dir>/fill/`` with the detail file's name, a subdirectory so no
-    detail glob can pick it up, and ``detail_dir`` is therefore required.
-    ``filler`` replaces the class in tests.
-
     With ``one_batch``, every row is served together as one batch, labelled
     :data:`ONE_BATCH`, instead of one batch per ``cluster``. This is how a model
     that serves several clusters, or Stage 1 questions and escalations together,
@@ -835,11 +823,6 @@ def evaluate_model(
     label and each row's ``stage`` and ``eff_run`` (see :func:`check_one_batch`).
     """
     run_benchmark = benchmark or run_vllm_benchmark
-    if fill_load and detail_dir is None:
-        raise ValueError("fill_load needs detail_dir: the load trace is the only "
-                         "record of the load each measured request saw")
-    if fill_load and filler is None:
-        from cre_router.load_fill import LoadFiller as filler
     check_pre_rendered(dataset, task)
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
@@ -860,34 +843,21 @@ def evaluate_model(
         gold = [item["answer"] for item in items]
 
         for run in range(runs):
-            fill = contextlib.nullcontext()
-            if fill_load:
-                name = _detail_name(task, model, cluster, run)
-                fill = filler(
-                    f"http://{host}:{port}", model, [item["prompt"] for item in items],
-                    n_measured=len(items), target=max_concurrency,
-                    sampling={"max_tokens": task.max_tokens, "temperature": task.temperature,
-                              "top_p": task.top_p, "top_k": task.top_k, "min_p": task.min_p,
-                              **({"skip_special_tokens": False} if task.pre_rendered else {})},
-                    chat=not task.pre_rendered,
-                    trace_path=Path(detail_dir) / "fill" / name,
-                )
-            with fill:
-                result = run_benchmark(
-                    split_path,
-                    model,
-                    task,
-                    host=host,
-                    port=port,
-                    max_concurrency=max_concurrency,
-                    seed=base_seed + run,
-                    download_dir=download_dir,
-                    # passed only when requested, so an injected benchmark that
-                    # predates this argument keeps working
-                    **({"detail_path": Path(detail_dir)
-                        / _detail_name(task, model, cluster, run)}
-                       if detail_dir is not None else {}),
-                )
+            result = run_benchmark(
+                split_path,
+                model,
+                task,
+                host=host,
+                port=port,
+                max_concurrency=max_concurrency,
+                seed=base_seed + run,
+                download_dir=download_dir,
+                # passed only when requested, so an injected benchmark that
+                # predates this argument keeps working
+                **({"detail_path": Path(detail_dir)
+                    / _detail_name(task, model, cluster, run)}
+                   if detail_dir is not None else {}),
+            )
             error, correct = score_generations(
                 result["generated_texts"], gold, task.parse, task.match
             )
