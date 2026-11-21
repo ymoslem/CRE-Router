@@ -187,13 +187,28 @@ def parse_telemath_answer(text: str) -> float | None:
     return last
 
 
+def _as_number(value: Any) -> float | None:
+    """``value`` as a finite number, whether stored as an int, a float or a string."""
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
 def answers_match(predicted: int | None, gold: Any) -> bool:
+    """Exact match, comparing numbers by value whatever their stored type.
+
+    A gold of ``"200"``, ``"200.0"`` or ``200`` matches a parsed ``200``, while
+    ``200.5`` does not match ``200``. Anything that is not a number is compared as
+    stripped text.
+    """
     if predicted is None:
         return False
-    try:
-        return int(predicted) == int(gold)
-    except (TypeError, ValueError):
-        return str(predicted).strip() == str(gold).strip()
+    a, b = _as_number(predicted), _as_number(gold)
+    if a is not None and b is not None:
+        return a == b
+    return str(predicted).strip() == str(gold).strip()
 
 
 def numeric_match(predicted: float | None, gold: Any, rel_tol: float = 1e-2) -> bool:

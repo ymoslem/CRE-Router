@@ -89,3 +89,14 @@ class TestBuild:
         assert sizes["train"] == 1  # the null-num_tokens row is dropped
         rows = [json.loads(l) for l in open(out / "train.jsonl")]
         assert [r["qid"] for r in rows] == ["a"]
+
+
+def test_regrading_matches_the_runs_own_grader_when_gold_is_a_string():
+    # AIME golds are stored as strings and parsed answers as integers; the label
+    # must follow cre evaluate's comparison, not plain equality.
+    from cre_router.qe.data import qe_row
+
+    gen = {"full_output": r"so the answer is \boxed{200}", "ground_truth_answer": "200",
+           "num_tokens": 9, "qid": "1", "run": 0, "correct": True}
+    assert qe_row(gen, task="aime")["decision_label"] == 1
+    assert qe_row({**gen, "ground_truth_answer": "201"}, task="aime")["decision_label"] == 0

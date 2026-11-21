@@ -32,11 +32,13 @@ def qe_row(gen: dict, task: str | None = None) -> dict:
     full_output = gen["full_output"]
     answer = gen.get("answer")
     if task is not None:
-        from cre_router.evaluate import TASKS
+        from cre_router.evaluate import TASKS, answers_match
 
         spec = TASKS[task]
         answer = spec.parse(full_output)
-        match = spec.match or (lambda p, g: p is not None and p == g)
+        # The same comparison cre evaluate grades with, so a label never disagrees
+        # with the run's own verdict (an AIME gold of "200" equals a parsed 200).
+        match = spec.match or answers_match
         correct = bool(match(answer, gen.get("ground_truth_answer")))
     else:
         # No task given, so the stored verdict is copied through. AIME and

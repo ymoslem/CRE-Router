@@ -393,3 +393,11 @@ class TestDetailedCapture:
                 == "detail_telemath_nothink_google_gemma-4-E2B-it_c2_r4.json")
         # a slashed model id must not turn into a subdirectory
         assert "/" not in _detail_name(T, "Qwen/Qwen3-30B", "0", 0)
+
+
+def test_numbers_match_by_value_whatever_their_stored_type():
+    assert answers_match(200, "200") and answers_match(200, "200.0") and answers_match(200.0, "200")
+    assert answers_match("200", 200) and answers_match(200, " 0200 ")
+    assert not answers_match(200, "200.5") and not answers_match(200.5, 200)
+    assert not answers_match(None, "200") and not answers_match(200, "")
+    assert answers_match("B", " B ") and not answers_match("B", "C")
