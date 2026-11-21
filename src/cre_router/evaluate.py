@@ -40,7 +40,10 @@ from cre_router.textutils import split_thinking
 #   2  2026-08-13: TeleMath parser fix (fractions, units and comma separators
 #      inside \boxed{}, double-boxed answers, exponent leakage) and
 #      numeric_match abs_tol 1e-9 -> 0
-SCORER_VERSION = 2
+#   3  2026-11-21: answers_match compares numbers by value whatever their stored
+#      type, and accepts any of the numbers in a gold that lists alternatives
+#      ("080 or 081 (both were accepted)", one AIME training question)
+SCORER_VERSION = 3
 
 # ---------------------------------------------------------------------------
 # Answer parsing
@@ -200,14 +203,17 @@ def answers_match(predicted: int | None, gold: Any) -> bool:
     """Exact match, comparing numbers by value whatever their stored type.
 
     A gold of ``"200"``, ``"200.0"`` or ``200`` matches a parsed ``200``, while
-    ``200.5`` does not match ``200``. Anything that is not a number is compared as
-    stripped text.
+    ``200.5`` does not match ``200``. A gold that lists accepted alternatives,
+    such as ``"080 or 081 (both were accepted)"``, matches any number it lists.
+    Anything else that is not a number is compared as stripped text.
     """
     if predicted is None:
         return False
     a, b = _as_number(predicted), _as_number(gold)
     if a is not None and b is not None:
         return a == b
+    if a is not None and isinstance(gold, str) and re.search(r"\bor\b", gold):
+        return any(_as_number(x) == a for x in re.findall(r"-?\d+(?:\.\d+)?", gold))
     return str(predicted).strip() == str(gold).strip()
 
 

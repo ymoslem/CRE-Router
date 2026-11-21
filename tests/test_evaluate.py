@@ -401,3 +401,10 @@ def test_numbers_match_by_value_whatever_their_stored_type():
     assert not answers_match(200, "200.5") and not answers_match(200.5, 200)
     assert not answers_match(None, "200") and not answers_match(200, "")
     assert answers_match("B", " B ") and not answers_match("B", "C")
+
+
+def test_a_gold_listing_alternatives_accepts_each_of_them():
+    gold = "080 or 081 (both were accepted)"
+    assert answers_match(80, gold) and answers_match(81, gold) and answers_match("081", gold)
+    assert not answers_match(82, gold) and not answers_match(None, gold)
+    assert not answers_match(2, "option 2 of 3")       # no "or": compared as text
