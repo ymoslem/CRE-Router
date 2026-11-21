@@ -126,6 +126,30 @@ def choose_epoch(per_fold: list[list[float]]) -> tuple[int, list[float]]:
     return best + 1, means
 
 
+def out_of_fold_rows(raw_rows: list[dict], held_out: list[int], p_accept_by_epoch: list[list[float]],
+                     epoch: int, fold: int) -> list[dict]:
+    """One row per held-out answer: the fold model's ``p_accept`` after ``epoch``.
+
+    ``p_accept_by_epoch[e][j]`` is the probability of Accept for ``held_out[j]`` after
+    epoch ``e + 1``. These are the out-of-fold scores of the training answers, made by
+    a model that never saw the answer's question, under the epoch count the final
+    model is trained for; they let a routing's escalations be decided on training data.
+    """
+    probs = p_accept_by_epoch[epoch - 1]
+    if len(probs) != len(held_out):
+        raise ValueError(f"fold {fold}: {len(probs)} scores for {len(held_out)} held-out rows")
+    out = []
+    for j, i in enumerate(held_out):
+        row = raw_rows[i]
+        for key in ("qid", "run", "num_tokens"):
+            if key not in row:
+                raise ValueError(f"training row {i} has no {key}; out-of-fold scores need it")
+        out.append({"qid": str(row["qid"]), "run": int(row["run"]), "num_tokens": row["num_tokens"],
+                    "cluster": row.get("cluster"), "p_accept": float(probs[j]), "fold": fold,
+                    "epoch": epoch})
+    return out
+
+
 def select_eval_run(eval_data, eval_run: int | None = None, split_name: str = "eval"):
     """Optionally restrict an eval split to a single run.
 
@@ -249,7 +273,8 @@ def main(argv: list[str] | None = None) -> None:
             "recall": recall_score(labels, preds, average="macro", zero_division=0),
         }
 
-    def make_trainer(class_weights, output_dir, train_ds, eval_ds, select_best, callbacks):
+    def make_trainer(class_weights, output_dir, train_ds, eval_ds, select_best, callbacks,
+                     metrics=None):
         if args.batch_size % args.grad_accum:
             raise SystemExit(f"--batch-size {args.batch_size} is not divisible by --grad-accum {args.grad_accum}")
         micro = args.batch_size // args.grad_accum
@@ -289,7 +314,7 @@ def main(argv: list[str] | None = None) -> None:
 
         trainer_cls = Trainer if class_weights is None else WeightedTrainer
         return trainer_cls(model=new_model(), args=training_args, train_dataset=train_ds,
-                           eval_dataset=eval_ds, compute_metrics=compute_metrics,
+                           eval_dataset=eval_ds, compute_metrics=metrics or compute_metrics,
                            callbacks=callbacks)
 
     train_labels = [_binary(l) for l in dataset[train_split]["decision_label"]]
@@ -297,7 +322,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.cv_folds:
         _cross_validate(args, dataset[train_split], train_labels, prepare, weights_for,
-                        make_trainer, tokenizer, TrainerCallback)
+                        make_trainer, tokenizer, TrainerCallback, compute_metrics)
         return
 
     # The eval split only drives early stopping and best-checkpoint selection, so
@@ -337,18 +362,21 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _cross_validate(args, raw, train_labels, prepare, weights_for, make_trainer, tokenizer,
-                    TrainerCallback) -> None:
+                    TrainerCallback, compute_metrics) -> None:
     """Choose the epoch count by k-fold cross-validation, then retrain on every row.
 
     Each fold trains for the full ``--epochs`` schedule with no early stopping and is
     scored on its held-out fold after every epoch. The chosen epoch is the one with
     the best macro-F1 averaged across folds. The final model trains on the whole
     training split under the same schedule and stops after that epoch. No test or
-    eval split is read. Fold scores and the choice are written to ``cv.json``.
+    eval split is read. Fold scores and the choice are written to ``cv.json``, and
+    each held-out answer's ``p_accept`` from its fold model after the chosen epoch to
+    ``oof.jsonl`` (see :func:`out_of_fold_rows`).
     """
     import json
     from pathlib import Path
 
+    import numpy as np
     import torch
 
     if args.push_to_hub:
@@ -359,15 +387,29 @@ def _cross_validate(args, raw, train_labels, prepare, weights_for, make_trainer,
     fold = group_folds(groups, args.cv_folds, args.seed)
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    per_fold = []
+    per_fold, fold_probs, held = [], [], []
     for k in range(args.cv_folds):
         tr_idx = [i for i, f in enumerate(fold) if f != k]
         va_idx = [i for i, f in enumerate(fold) if f == k]
         print(f"Fold {k + 1}/{args.cv_folds}: {len(tr_idx)} training rows, {len(va_idx)} held out, "
               f"{len(set(groups[i] for i in va_idx))} held-out groups")
+        captured: list[list[float]] = []
+
+        def capture(eval_pred, _seen=captured):
+            # Keep each epoch's held-out Accept probabilities, then score as usual.
+            logits = np.asarray(eval_pred[0], dtype=np.float64)
+            z = np.exp(logits - logits.max(axis=1, keepdims=True))
+            _seen.append((z[:, 1] / z.sum(axis=1)).tolist())
+            return compute_metrics(eval_pred)
+
         trainer = make_trainer(weights_for([train_labels[i] for i in tr_idx]), str(out / f"fold{k}"),
-                               prepare(raw.select(tr_idx)), prepare(raw.select(va_idx)), False, [])
+                               prepare(raw.select(tr_idx)), prepare(raw.select(va_idx)), False, [],
+                               metrics=capture)
         trainer.train()
+        if len(captured) != args.epochs:
+            raise SystemExit(f"fold {k}: {len(captured)} sets of held-out scores, expected {args.epochs}")
+        fold_probs.append(captured)
+        held.append(va_idx)
         scores = [h["eval_f1_macro"] for h in trainer.state.log_history if "eval_f1_macro" in h]
         if len(scores) != args.epochs:
             raise SystemExit(f"fold {k}: {len(scores)} epoch scores, expected {args.epochs}")
@@ -375,6 +417,12 @@ def _cross_validate(args, raw, train_labels, prepare, weights_for, make_trainer,
         print(f"Fold {k + 1} macro-F1 by epoch: {[round(s, 4) for s in scores]}")
     epoch, means = choose_epoch(per_fold)
     print(f"Mean macro-F1 by epoch: {[round(m, 4) for m in means]}; chosen epoch {epoch}")
+    rows = raw.to_list()
+    oof = [r for k in range(args.cv_folds)
+           for r in out_of_fold_rows(rows, held[k], fold_probs[k], epoch, k)]
+    if len({(r["qid"], r["run"]) for r in oof}) != len(rows):
+        raise SystemExit("out-of-fold scores do not cover every training answer once")
+    (out / "oof.jsonl").write_text("".join(json.dumps(r) + "\n" for r in oof))
 
     class StopAfter(TrainerCallback):
         def on_epoch_end(self, train_args, state, control, **kwargs):
