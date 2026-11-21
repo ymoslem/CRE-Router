@@ -103,6 +103,23 @@ def test_cre_batches_reads_the_fit_artifacts(tmp_path):
     assert Routing.from_json(tmp_path / "out" / "rt_routing.json").strong_batch == "x_s12_rt_s"
 
 
+def test_strong_batches_for_stage1_captures_served_elsewhere(tmp_path):
+    tags = {"S": "dedup_s1_s_c02", "E": "dedup_s1_e_c1"}
+    routing = write_plan(tmp_path, "x", "rt", ASSIGN, DATA, strong="S", gated=["1"], probs=probs(),
+                         runs=RUNS, stage1_tags=tags, strong_runs=1)
+    assert routing["tiers"] == tags and routing["served"] == {"S": "dedup_s1_s_c02"}
+    assert routing["strong_runs"] == 1 and routing["strong_batch"] == "x_s12_rt_s"
+    assert not (tmp_path / "x_s1_rt_e.jsonl").exists()          # Stage 1 is not rewritten
+    assert (tmp_path / "x_s12_rt_s_r0.jsonl").exists()
+    assert Routing.from_json(tmp_path / "rt_routing.json").strong_runs == 1
+
+
+def test_stage1_tags_must_name_exactly_the_models_used(tmp_path):
+    with pytest.raises(ValueError, match="stage1_tags names"):
+        write_plan(tmp_path, "x", "rt", ASSIGN, DATA, strong="S", gated=["1"], probs=probs(),
+                   runs=RUNS, stage1_tags={"S": "t"})
+
+
 def test_an_exact_tie_escalates_in_the_strong_batch():
     p = probs()
     p[("c", 0)] = {"p_accept": 0.5, "num_tokens": 3}

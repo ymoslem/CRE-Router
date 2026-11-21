@@ -219,6 +219,52 @@ def test_per_cluster_routings_refuse_per_model_fields():
         compose(r, CAPS.__getitem__, probs())
 
 
+# ---------------------------------------------------------------- paired Stage 2 (5 x 1)
+
+def a12_once(r, esc=("q3",)):
+    """Strong batch r served once: run 0 only, paired with efficient run r."""
+    cap = {(q, 0): row(c, tpot=40.0 + r, e2el=4.0, batch="all", stage=1)
+           for q, c in (("q1", "0"), ("q2", "2"))}
+    cap.update({(q, 0): row("1", n=21, tpot=50.0 + r, e2el=5.0, batch="all", stage=2, eff_run=r)
+                for q in esc})
+    return cap
+
+
+PAIRED = Routing(**{**ROUTING.__dict__, "strong_runs": 1})
+CAPS_PAIRED = {**CAPS, **{f"a12_r{r}": a12_once(r) for r in range(RUNS)}}
+
+
+def test_paired_design_holds_one_cell_per_efficient_run():
+    res = compose(PAIRED, CAPS_PAIRED.__getitem__, probs())
+    i = {q: k for k, q in enumerate(res.qids)}
+    t1, t12 = res.grid_stage1[1], res.grid_stage1plus2[1]
+    assert t1.shape[1:] == (RUNS, 1) and t12.shape[1:] == (RUNS, 1)
+    # Stage 1 on cell r is every model's run r (A's one batch, B's cluster batch).
+    assert t1[i["q1"], 1, 0] == 31.0 and t1[i["q4"], 1, 0] == 6.0
+    # Stage 1 + 2 on cell r: strong batch r's only run, and B's run r.
+    assert t12[i["q1"], 1, 0] == 41.0 and t12[i["q4"], 0, 0] == 5.0
+    assert t12[i["q3"], 1, 0] == pytest.approx((6.0 * 10 + 51.0 * 20) / 20)
+    assert res.stage1[1] == pytest.approx(np.mean(t1))     # the mean over the 2 cells
+
+
+def test_paired_kept_answers_still_cancel():
+    res = compose(PAIRED, CAPS_PAIRED.__getitem__, probs())
+    i = {q: k for k, q in enumerate(res.qids)}
+    for s12, s1p in zip(res.grid_stage1plus2, res.grid_stage1_paired):
+        assert np.all((s12 - s1p)[i["q4"]] == 0)
+
+
+def test_a_strong_batch_served_five_times_is_refused_when_paired():
+    with pytest.raises(ValueError, match="runs"):
+        compose(PAIRED, CAPS.__getitem__, probs())
+
+
+def test_strong_runs_must_be_all_or_one():
+    r = Routing(**{**ROUTING.__dict__, "runs": 3, "strong_runs": 2})
+    with pytest.raises(ValueError, match="strong_runs"):
+        compose(r, CAPS.__getitem__, probs())
+
+
 # ---------------------------------------------------------------- escalation rule
 
 def test_an_exact_tie_is_escalated_as_the_serving_classifier_does():

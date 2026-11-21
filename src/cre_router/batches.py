@@ -137,7 +137,9 @@ def write_plan(out_dir: str | Path, prefix: str, name: str, assign: Mapping[str,
                datasets: Mapping[str, list[Mapping]], *, strong: str | None = None,
                gated: list[str] | None = None,
                probs: Mapping[tuple[str, int], Mapping] | None = None,
-               tau: float = 0.5, runs: int = 5, seed: int = 0) -> dict:
+               tau: float = 0.5, runs: int = 5, seed: int = 0,
+               stage1_tags: Mapping[str, str] | None = None,
+               strong_runs: int | None = None) -> dict:
     """Write a routing's batches, their manifest and, when complete, its routing file.
 
     Tags are ``<prefix>_s1_<name>_<model>`` for Stage 1 and
@@ -150,18 +152,37 @@ def write_plan(out_dir: str | Path, prefix: str, name: str, assign: Mapping[str,
     (``<name>_routing.json``) is written by the call that completes the plan: the
     first for a routing that gates nothing, the second otherwise. Refuses to
     overwrite any file.
+
+    ``stage1_tags`` names Stage 1 captures served already, one per model, for
+    plans whose Stage 1 batches were built elsewhere (deduplicated across
+    routings, for example); the call then writes only the strong model's batches
+    and the routing file, which names those tags. ``strong_runs`` is recorded in
+    the routing file: 1 when each strong batch is served once and paired with its
+    efficient run (:class:`cre_router.compose.Routing`).
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     gated = sorted(gated or [])
     if gated and strong is None:
         raise ValueError("a gated routing needs its strong model")
-    s1 = {m: f"{prefix}_s1_{name}_{slug(m)}" for m in sorted(set(assign.values()))}
-    batches = {s1[m]: rows for m, rows in stage1_batches(assign, datasets, seed).items()}
+    used = sorted(set(assign.values()))
+    if stage1_tags is not None:
+        if set(stage1_tags) != set(used):
+            raise ValueError(f"stage1_tags names {sorted(stage1_tags)}, the routing uses {used}")
+        if probs is None or not gated:
+            raise ValueError("with stage1_tags, only the strong model's batches are written: "
+                             "give the scores of a gated routing")
+        s1 = dict(stage1_tags)
+    else:
+        s1 = {m: f"{prefix}_s1_{name}_{slug(m)}" for m in used}
     multi = {m for m in s1 if sum(v == m for v in assign.values()) > 1}
     routing = {"name": name, "basis": "per_model", "assign": dict(assign),
                "tiers": dict(s1), "served": {m: s1[m] for m in sorted(multi)},
                "tau": tau, "runs": runs}
+    if strong_runs is not None:
+        routing["strong_runs"] = strong_runs
+    batches = ({} if stage1_tags is not None else
+               {s1[m]: rows for m, rows in stage1_batches(assign, datasets, seed).items()})
     if probs is None:
         _write_json(out_dir / f"{name}_s1_manifest.json", _write(out_dir, batches))
         if not gated:

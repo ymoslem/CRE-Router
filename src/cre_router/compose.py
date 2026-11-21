@@ -104,12 +104,17 @@ class Routing:
     basis: str = "per_cluster"
     served: Mapping[str, str] = field(default_factory=dict)
     strong_batch: str | None = None
+    #: Runs served of each strong batch on the per_model basis: ``runs`` (the
+    #: default, every strong run against every efficient run) or 1, where strong
+    #: batch ``r`` is served once and paired with efficient run ``r``, so the grids
+    #: hold the ``runs`` cells (r, r) instead of ``runs`` x ``runs``.
+    strong_runs: int | None = None
 
     @classmethod
     def from_json(cls, path: str | Path) -> "Routing":
         d = json.loads(Path(path).read_text())
         keys = {"tiers", "assign", "gated", "strong", "tau", "runs", "name",
-                "basis", "served", "strong_batch"}
+                "basis", "served", "strong_batch", "strong_runs"}
         return cls(**{k: v for k, v in d.items() if k in keys})
 
 
@@ -222,8 +227,8 @@ def compose(routing: Routing, load: Callable[[str], Mapping],
         return _compose_per_model(routing, load, probs)
     if routing.basis != "per_cluster":
         raise ValueError(f"unknown basis {routing.basis!r}")
-    if routing.served or routing.strong_batch:
-        raise ValueError("served and strong_batch belong to the per_model basis")
+    if routing.served or routing.strong_batch or routing.strong_runs not in (None, routing.runs):
+        raise ValueError("served, strong_batch and a paired strong_runs belong to the per_model basis")
     runs = routing.runs
     used = sorted(set(routing.assign.values()))
     caps = {name: load(routing.tiers[name]) for name in used}
@@ -296,9 +301,11 @@ def _finish(s1_parts, s1p_parts, s12_parts, escalated, by_cluster, runs) -> Comp
     a1p, e1p, t1p = stack(s1p_parts)
 
     def mean25(acc, tpot, e2el):
-        pairs = [(acc[:, r, s].mean(), tpot[:, r, s].mean(), e2el[:, r, s].mean())
-                 for r in range(runs) for s in range(runs)]
-        return tuple(float(np.mean([p[i] for p in pairs])) for i in range(3))
+        # Mean over the (efficient run, strong run) cells the grids hold: 25 for
+        # 5 x 5, or the 5 paired cells when each strong batch was served once.
+        cells = [(acc[:, r, s].mean(), tpot[:, r, s].mean(), e2el[:, r, s].mean())
+                 for r in range(acc.shape[1]) for s in range(acc.shape[2])]
+        return tuple(float(np.mean([p[i] for p in cells])) for i in range(3))
 
     return Composition(
         stage1=mean25(a1, t1, e1), stage1plus2=mean25(a2, t2, e2),
@@ -355,6 +362,10 @@ def _compose_per_model(routing: Routing, load: Callable[[str], Mapping],
     that model's one-batch answers; the output-length check refuses any others.
     """
     runs = routing.runs
+    s_runs = routing.strong_runs or runs
+    if s_runs not in (1, runs):
+        raise ValueError(f"strong_runs is {s_runs}; it must be {runs} or 1 (paired)")
+    paired = s_runs == 1 and runs > 1
     used = sorted(set(routing.assign.values()))
     tiers = {name: load(routing.tiers[name]) for name in used}
     qid2c = _clusters(routing, tiers)
@@ -412,31 +423,37 @@ def _compose_per_model(routing: Routing, load: Callable[[str], Mapping],
             continue
         tag = f"{routing.strong_batch}_r{r}"
         cap = load(tag)
-        _check_one_batch(cap, tag, runs, strong_own, want2, eff_run=r)
+        _check_one_batch(cap, tag, s_runs, strong_own, want2, eff_run=r)
         strong_r[r] = cap
+
+    def col(g, r):
+        return {f: g[f][:, [r]] for f in g}
 
     s1_parts, s1p_parts, s12_parts, escalated = [], [], [], {}
     for c, qs in by_cluster.items():
         m = routing.assign[c]
         tier = _grids(stage1_cap[m], qs, runs)
         off = np.zeros((len(qs), runs), dtype=bool)
-        s1_parts.append(per_request_metrics(off, ~off, tier, tier))
+        # The model's own run on the strong-run axis: every run s, or, paired, run r.
+        same = [col(tier, r) for r in range(runs)] if paired else tier
+        s1 = per_request_metrics(off, ~off, tier, same)
+        s1_parts.append(s1)
         if c in routing.gated:
-            s1p_parts.append(per_request_metrics(~off, off, tier, [tier] * runs))
+            s1p_parts.append(per_request_metrics(~off, off, tier, same if paired else [tier] * runs))
             sets = esc_sets[c]
-            strong = [_grids(strong_r[r], qs, runs, keep=sets[r]) if sets[r] else tier
-                      for r in range(runs)]
+            strong = [(_grids(strong_r[r], qs, s_runs, keep=sets[r]) if sets[r]
+                       else (col(tier, r) if paired else tier)) for r in range(runs)]
             esc = np.array([[q in sets[r] for r in range(runs)] for q in qs])
             s12_parts.append(per_request_metrics(~off, esc, tier, strong))
             escalated[c] = [len(x) for x in sets]
         elif m == routing.strong and routing.gated:
             # The strong model's own cluster in Stage 1 + 2: answered on the batch
             # it shared with run r's escalations, so priced on (r, s).
-            own = [_grids(strong_r[r], qs, runs) for r in range(runs)]
-            s1p_parts.append(per_request_metrics(off, ~off, tier, tier))
-            s12_parts.append(per_request_metrics(off, ~off, own[0], own))
+            own = [_grids(strong_r[r], qs, s_runs) for r in range(runs)]
+            s1p_parts.append(s1)
+            s12_parts.append(per_request_metrics(off, ~off, tier, own))
         else:
-            s1p_parts.append(per_request_metrics(off, ~off, tier, tier))
-            s12_parts.append(per_request_metrics(off, ~off, tier, tier))
+            s1p_parts.append(s1)
+            s12_parts.append(s1)
 
     return _finish(s1_parts, s1p_parts, s12_parts, escalated, by_cluster, runs)

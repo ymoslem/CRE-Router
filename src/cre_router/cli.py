@@ -242,7 +242,7 @@ def _print_near_ties(models, cluster_sizes, selection, error_tol, cost_condition
 
 def cmd_compose(args: argparse.Namespace) -> None:
     from cre_router.captures import dataset_loader, load_capture
-    from cre_router.compose import Routing, compose, load_accept_probs
+    from cre_router.compose import Routing, compose
 
     routing = Routing.from_json(args.routing)
     if args.dataset:
@@ -251,7 +251,7 @@ def cmd_compose(args: argparse.Namespace) -> None:
         load = lambda tag: load_capture(tag, args.captures)  # noqa: E731
     if routing.gated and not args.probs:
         raise SystemExit("this routing gates clusters, so it needs --probs")
-    probs = load_accept_probs(args.probs, args.probs_source) if args.probs else {}
+    probs = _merged_probs(args.probs, args.probs_source)
     result = compose(routing, load, probs)
     rows = (("Stage 1", result.stage1), ("Stage 1 + 2", result.stage1plus2))
     if args.json:
@@ -268,9 +268,21 @@ def cmd_compose(args: argparse.Namespace) -> None:
         print(f"  cluster {c} escalations per run: {n}")
 
 
+def _merged_probs(paths, source) -> dict:
+    """Accept probabilities from one or more files, refusing any answer scored twice."""
+    from cre_router.compose import load_accept_probs
+
+    probs: dict = {}
+    for path in paths or []:
+        part = load_accept_probs(path, source)
+        if set(part) & set(probs):
+            raise SystemExit(f"{path} scores answers another --probs file scores already")
+        probs.update(part)
+    return probs
+
+
 def cmd_batches(args: argparse.Namespace) -> None:
     from cre_router.batches import write_plan
-    from cre_router.compose import load_accept_probs
 
     art = RouterArtifacts.load(args.router)
     datasets = {}
@@ -279,10 +291,14 @@ def cmd_batches(args: argparse.Namespace) -> None:
         if not sep:
             raise SystemExit(f"--dataset takes MODEL=PATH, not {spec!r}")
         datasets[model] = _read_jsonl(Path(path))
-    probs = load_accept_probs(args.probs, args.probs_source) if args.probs else None
+    probs = _merged_probs(args.probs, args.probs_source) if args.probs else None
+    tags = None
+    if args.stage1_tag:
+        tags = dict(spec.partition("=")[::2] for spec in args.stage1_tag)
     routing = write_plan(args.out, args.prefix, args.name, art.routing_table, datasets,
                          strong=art.escalation_target, gated=sorted(art.gated_clusters),
-                         probs=probs, tau=args.tau, runs=args.runs, seed=args.seed)
+                         probs=probs, tau=args.tau, runs=args.runs, seed=args.seed,
+                         stage1_tags=tags, strong_runs=args.strong_runs)
     step = "Stage 1 + 2" if probs is not None else "Stage 1"
     print(f"wrote the {step} batches for {args.name} to {args.out}")
     if art.gated_clusters and probs is None:
@@ -673,9 +689,16 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--prefix", required=True, help="tag prefix, e.g. cvb")
     p.add_argument("--name", required=True, help="routing name in the tags, e.g. tm1x_tpot20")
     p.add_argument("--out", required=True, help="directory for the batches and manifests")
-    p.add_argument("--probs", default=None,
+    p.add_argument("--probs", action="append", default=None,
                    help="accept probabilities for the gated models' Stage 1 answers: "
-                        "writes the strong model's Stage 1 + 2 batches")
+                        "writes the strong model's Stage 1 + 2 batches; once per gated "
+                        "model when several are gated")
+    p.add_argument("--stage1-tag", action="append", default=None, metavar="MODEL=TAG",
+                   help="a Stage 1 capture served already, once per model; then only the "
+                        "strong model's batches and the routing spec are written")
+    p.add_argument("--strong-runs", type=int, default=None,
+                   help="runs to serve of each strong batch, recorded in the routing spec: "
+                        "1 pairs strong batch r with efficient run r (default: --runs)")
     p.add_argument("--probs-source", default=None, help="source_file within a parquet --probs")
     p.add_argument("--tau", type=float, default=0.5, help="escalate unless p_accept > 0.5 and p_accept >= tau, the serving classifier's rule (default 0.5)")
     p.add_argument("--runs", type=int, default=5, help="efficient-model runs, one strong batch each")
@@ -692,9 +715,10 @@ def main(argv: list[str] | None = None) -> None:
     src.add_argument("--captures", help="directory of raw captures, as cre evaluate saves them")
     src.add_argument("--dataset", help="download of the released captures dataset "
                                        "(needs the data extra)")
-    p.add_argument("--probs",
+    p.add_argument("--probs", action="append", default=None,
                    help="accept probabilities: a JSONL dump, or the scores dataset's parquet; "
-                        "needed only when the routing gates a cluster")
+                        "needed only when the routing gates a cluster; once per gated model "
+                        "when several are gated")
     p.add_argument("--probs-source", help="with a parquet --probs, the source_file to use")
     p.add_argument("--json", action="store_true", help="print JSON instead of a table")
     p.set_defaults(func=cmd_compose)
