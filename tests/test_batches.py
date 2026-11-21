@@ -101,3 +101,9 @@ def test_cre_batches_reads_the_fit_artifacts(tmp_path):
     pp.write_text("".join(json.dumps({"qid": q, "run": r, **v}) + "\n" for (q, r), v in probs().items()))
     main(args + ["--probs", str(pp), "--runs", str(RUNS)])
     assert Routing.from_json(tmp_path / "out" / "rt_routing.json").strong_batch == "x_s12_rt_s"
+
+
+def test_an_exact_tie_escalates_in_the_strong_batch():
+    p = probs()
+    p[("c", 0)] = {"p_accept": 0.5, "num_tokens": 3}
+    assert {r["id"] for r in strong_batch(ASSIGN, "S", ["1"], DATA, p, run=0, tau=0.5)} == {"a", "b", "c", "d"}

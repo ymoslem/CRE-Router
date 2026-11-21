@@ -8,7 +8,7 @@ serves exactly the traffic the routing sends it, as one batch:
 - **Stage 1 + 2**: for each run ``r`` of the efficient models, the strong model
   gets one batch holding its own Stage 1 clusters together with run ``r``'s
   escalations, the gated questions whose answer the estimator rejected
-  (``p_accept < tau``). The escalation decisions must score the efficient
+  (:func:`cre_router.compose.escalates`, the serving classifier's rule). The escalation decisions must score the efficient
   models' Stage 1 one-batch answers, so these batches are built only after those
   answers exist and have been scored.
 
@@ -30,6 +30,7 @@ import re
 from pathlib import Path
 from typing import Mapping
 
+from cre_router.compose import escalates
 from cre_router.evaluate import check_one_batch, question_id
 
 __all__ = ["stage1_batches", "strong_batch", "write_plan", "slug"]
@@ -90,7 +91,8 @@ def strong_batch(assign: Mapping[str, str], strong: str, gated: list[str],
     """The strong model's Stage 1 + 2 batch for efficient run ``run``.
 
     Its own Stage 1 clusters, plus every gated question whose run-``run`` answer
-    has ``p_accept < tau``, posed to the strong model with its own prompt.
+    is escalated (:func:`cre_router.compose.escalates`), posed to the strong model
+    with its own prompt.
     """
     if strong in {assign[c] for c in gated}:
         raise ValueError("the strong model cannot be the efficient model of a gated cluster")
@@ -106,7 +108,7 @@ def strong_batch(assign: Mapping[str, str], strong: str, gated: list[str],
             q = question_id(item)
             if (q, run) not in probs:
                 raise ValueError(f"cluster {c} run {run}: question {q} has no accept probability")
-            if probs[(q, run)]["p_accept"] < tau:
+            if escalates(probs[(q, run)]["p_accept"], tau):
                 rows.append(_row(by_qid[q], 2, eff_run=run))
     check_one_batch(rows)
     return _shuffled(rows, seed)

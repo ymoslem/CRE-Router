@@ -62,6 +62,16 @@ __all__ = ["Routing", "Composition", "compose", "load_accept_probs"]
 PAIRING_AGREEMENT = 0.99
 
 
+def escalates(p_accept: float, tau: float) -> bool:
+    """Whether an answer with this accept probability is escalated.
+
+    The same rule the serving classifier applies (``QEClassifier``): an answer is
+    kept only when Accept is the more likely class and ``p_accept >= tau``. An
+    exact tie at 0.5 is therefore escalated.
+    """
+    return not (p_accept > 0.5 and p_accept >= tau)
+
+
 @dataclass(frozen=True)
 class Routing:
     """A routed system: which model serves each cluster, and which are gated.
@@ -233,7 +243,7 @@ def compose(routing: Routing, load: Callable[[str], Mapping],
             if missing:
                 raise ValueError(f"cluster {c} run {r}: {len(missing)} gated questions "
                                  f"have no accept probability, e.g. {missing[0]}")
-            sets.append({q for q in qs if probs[(q, r)]["p_accept"] < routing.tau})
+            sets.append({q for q in qs if escalates(probs[(q, r)]["p_accept"], routing.tau)})
         esc_sets[c] = sets
 
     # Each run's escalations were served as one batch per stem. Several gated
@@ -391,7 +401,7 @@ def _compose_per_model(routing: Routing, load: Callable[[str], Mapping],
             if missing:
                 raise ValueError(f"cluster {c} run {r}: {len(missing)} gated questions "
                                  f"have no accept probability, e.g. {missing[0]}")
-            sets.append({q for q in qs if probs[(q, r)]["p_accept"] < routing.tau})
+            sets.append({q for q in qs if escalates(probs[(q, r)]["p_accept"], routing.tau)})
         esc_sets[c] = sets
 
     strong_own = traffic.get(routing.strong, set()) if routing.gated else set()

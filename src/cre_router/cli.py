@@ -677,7 +677,7 @@ def main(argv: list[str] | None = None) -> None:
                    help="accept probabilities for the gated models' Stage 1 answers: "
                         "writes the strong model's Stage 1 + 2 batches")
     p.add_argument("--probs-source", default=None, help="source_file within a parquet --probs")
-    p.add_argument("--tau", type=float, default=0.5, help="escalate when p_accept < tau")
+    p.add_argument("--tau", type=float, default=0.5, help="escalate unless p_accept > 0.5 and p_accept >= tau, the serving classifier's rule (default 0.5)")
     p.add_argument("--runs", type=int, default=5, help="efficient-model runs, one strong batch each")
     p.add_argument("--seed", type=int, default=0, help="row order within each batch")
     p.set_defaults(func=cmd_batches)

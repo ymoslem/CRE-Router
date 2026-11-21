@@ -217,3 +217,13 @@ def test_per_cluster_routings_refuse_per_model_fields():
     r = Routing(**{**ROUTING.__dict__, "basis": "per_cluster"})
     with pytest.raises(ValueError, match="per_model"):
         compose(r, CAPS.__getitem__, probs())
+
+
+# ---------------------------------------------------------------- escalation rule
+
+def test_an_exact_tie_is_escalated_as_the_serving_classifier_does():
+    from cre_router.compose import escalates
+    assert escalates(0.5, 0.5) and escalates(0.49, 0.5) and not escalates(0.51, 0.5)
+    assert escalates(0.6, 0.7) and not escalates(0.7, 0.7)
+    res = compose(ROUTING, CAPS.__getitem__, probs(p3=0.5))
+    assert res.escalated_per_run == {"1": [1, 1]}
